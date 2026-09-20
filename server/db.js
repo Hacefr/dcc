@@ -6,7 +6,6 @@ const pool = new Pool({
     ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
 
-// Initialize database tables
 const initDB = async () => {
     const query = `
         CREATE TABLE IF NOT EXISTS users (
@@ -21,7 +20,6 @@ const initDB = async () => {
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         );
 
-        -- Add column if it didn't exist before
         ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT DEFAULT NULL;
 
         CREATE TABLE IF NOT EXISTS announcements (
@@ -33,6 +31,15 @@ const initDB = async () => {
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         );
         ALTER TABLE announcements ADD COLUMN IF NOT EXISTS avatar_url TEXT DEFAULT NULL;
+
+        CREATE TABLE IF NOT EXISTS general_messages (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+            username VARCHAR(50) NOT NULL,
+            avatar_url TEXT DEFAULT NULL,
+            content TEXT NOT NULL,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
 
         CREATE TABLE IF NOT EXISTS direct_messages (
             id SERIAL PRIMARY KEY,
