@@ -1,5 +1,5 @@
-// Change this to your Render URL when deployed:
-const SERVER_URL = 'https://dcc-x6ev.onrender.com';
+// Automatically connects to whatever domain the app is running on
+const SERVER_URL = window.location.origin;
 
 let token = localStorage.getItem('token');
 let currentUser = JSON.parse(localStorage.getItem('user'));
@@ -431,7 +431,6 @@ chatForm.addEventListener('submit', async (e) => {
     if (!text) return;
 
     if (activeView === 'server') {
-        // Send announcement
         await fetch(`${SERVER_URL}/api/announcements`, {
             method: 'POST',
             headers: {
@@ -441,7 +440,6 @@ chatForm.addEventListener('submit', async (e) => {
             body: JSON.stringify({ content: text })
         });
     } else if (activeView === 'dms' && activeFriend) {
-        // Send direct message via WebSocket
         socket.emit('send_dm', { receiverId: activeFriend.id, content: text });
     }
 
@@ -530,12 +528,10 @@ const myStatusText = document.getElementById('my-status-text');
 
 trackTabBtn.addEventListener('click', async () => {
     try {
-        // Screen capture API to read the tab or window name
         tabCaptureStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
         const track = tabCaptureStream.getVideoTracks()[0];
         const tabTitle = track.label || 'Active Tab';
 
-        // Stop video capture right away (we only need the title)
         track.stop();
 
         startActivityTimer(tabTitle);
