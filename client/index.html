@@ -10,6 +10,12 @@
 </head>
 <body>
 
+    <!-- Server Alert Banner -->
+    <div id="server-alert-banner" style="display: none;">
+        <span id="alert-banner-text"></span>
+        <button onclick="document.getElementById('server-alert-banner').style.display='none'">Dismiss</button>
+    </div>
+
     <!-- Hidden file input for uploading profile picture -->
     <input type="file" id="avatar-file-input" accept="image/*" style="display: none;">
 
@@ -48,16 +54,23 @@
         </div>
     </div>
 
-    <!-- ================= 2. DEBUG MODAL (/#debug) ================= -->
+    <!-- ================= 2. DEBUG MODAL (/#debug - OWNER ONLY) ================= -->
     <div id="debug-overlay" style="display: none;">
         <div id="debug-window">
             <div id="debug-header">
                 <div>
-                    <h3>SYSTEM DEBUG — PLAYER ACCOUNT STATS</h3>
+                    <h3>SYSTEM DEBUG & ADMIN PANEL</h3>
                     <span id="debug-sys-date" class="debug-date-tag"></span>
                 </div>
                 <button id="close-debug-btn" class="debug-close-btn">Close</button>
             </div>
+
+            <!-- Server Broadcast Box -->
+            <div id="debug-broadcast-box">
+                <input type="text" id="broadcast-input" placeholder="Broadcast alert to all connected users...">
+                <button id="send-broadcast-btn">Send Alert</button>
+            </div>
+
             <div class="debug-content">
                 <table class="debug-table">
                     <thead>
@@ -66,7 +79,8 @@
                             <th>Role</th>
                             <th>Status</th>
                             <th>Playtime (D/M/Y)</th>
-                            <th>Current Tab / Activity</th>
+                            <th>Current Tab</th>
+                            <th>Admin Actions</th>
                         </tr>
                     </thead>
                     <tbody id="debug-players-body"></tbody>
@@ -111,11 +125,15 @@
                 <ul id="friends-list"></ul>
             </div>
 
-            <!-- Server View Section (Only #announcements) -->
+            <!-- Server View Section (Announcements + General) -->
             <div id="server-sidebar-section" style="display: none;">
-                <div class="channel-item active">
+                <div class="channel-item active" id="channel-announcements-btn">
                     <span class="hash-tag">#</span>
                     <span>announcements</span>
+                </div>
+                <div class="channel-item" id="channel-general-btn">
+                    <span class="hash-tag">#</span>
+                    <span>general</span>
                 </div>
             </div>
 
@@ -151,23 +169,31 @@
                 </div>
             </header>
 
-            <!-- Active Voice Call Bar -->
+            <!-- Active Voice Call Bar & Screen Share Box -->
             <div id="active-call-panel" style="display: none;">
-                <span id="call-status-text" class="call-status-text">Connected</span>
-                <div class="call-controls">
-                    <button id="mute-mic-btn" class="btn-call-mute">Mute</button>
-                    <button id="end-call-btn" class="btn-call-end">Disconnect</button>
+                <div class="call-top-bar">
+                    <span id="call-status-text" class="call-status-text">Connected</span>
+                    <div class="call-controls">
+                        <button id="screen-share-btn" class="btn-call-screen">Share Screen</button>
+                        <button id="mute-mic-btn" class="btn-call-mute">Mute</button>
+                        <button id="end-call-btn" class="btn-call-end">Disconnect</button>
+                    </div>
                 </div>
+                <video id="remote-video" autoplay playsinline style="display: none;"></video>
                 <audio id="remote-audio" autoplay></audio>
             </div>
 
             <!-- Messages Log -->
             <div id="messages-container"></div>
 
-            <!-- Chat Bottom Input Area (Multi-line textarea) -->
+            <!-- Chat Bottom Input Area -->
             <footer id="chat-input-container">
+                <!-- Emoji Picker Dropdown Grid -->
+                <div id="emoji-picker" style="display: none;"></div>
+
                 <form id="chat-message-form">
                     <textarea id="chat-message-input" placeholder="Message... (Shift+Enter for new line)" rows="1"></textarea>
+                    <button type="button" id="emoji-toggle-btn" class="btn-emoji" title="Emojis">☺</button>
                     <button type="submit" class="btn-send">Send</button>
                 </form>
                 <div id="channel-locked-banner" class="read-only-banner" style="display: none;">
