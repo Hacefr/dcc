@@ -15,14 +15,12 @@ const io = new Server(server, {
 });
 
 app.use(cors());
-// Increased JSON limit so base64 profile pictures upload without issues
 app.use(express.json({ limit: '10mb' }));
 
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret';
 const OWNER_USERNAME = (process.env.OWNER_USERNAME || 'admin').toLowerCase();
 
-// Store active connections: userId -> { socketId, username, connectedAt }
 const activeSockets = new Map();
 
 function formatPlaytime(totalSeconds) {
@@ -58,7 +56,7 @@ const authenticate = (req, res, next) => {
 
 // ================= API ROUTES =================
 
-// 1. Register
+// Register
 app.post('/api/register', async (req, res) => {
     const { username, password } = req.body;
     if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
@@ -79,7 +77,7 @@ app.post('/api/register', async (req, res) => {
     }
 });
 
-// 2. Login
+// Login
 app.post('/api/login', async (req, res) => {
     const { username, password } = req.body;
     try {
@@ -106,7 +104,7 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-// 3. Update Avatar
+// Update Avatar
 app.post('/api/user/avatar', authenticate, async (req, res) => {
     const { avatarUrl } = req.body;
     try {
@@ -118,8 +116,12 @@ app.post('/api/user/avatar', authenticate, async (req, res) => {
     }
 });
 
-// 4. DEBUG STATS
-app.get('/api/debug', async (req, res) => {
+// DEBUG STATS (Owner Only)
+app.get('/api/debug', authenticate, async (req, res) => {
+    if (req.user.role !== 'owner') {
+        return res.status(403).json({ error: 'Access denied. Owner only.' });
+    }
+
     try {
         const result = await db.query(
             'SELECT id, username, role, avatar_url, total_online_seconds, current_tab, tab_started_at FROM users ORDER BY id ASC'
@@ -161,7 +163,32 @@ app.get('/api/debug', async (req, res) => {
     }
 });
 
-// 5. ANNOUNCEMENTS
+// Admin: Reset Friend's Password
+app.post('/api/admin/reset-password', authenticate, async (req, res) => {
+    if (req.user.role !== 'owner') return res.status(403).json({ error: 'Owner only' });
+    const { targetUserId, newPassword } = req.body;
+    if (!targetUserId || !newPassword) return res.status(400).json({ error: 'Missing parameters' });
+
+    try {
+        const hash = await bcrypt.hash(newPassword, 10);
+        await db.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, targetUserId]);
+        res.json({ success: true, message: 'Password updated successfully' });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to reset password' });
+    }
+});
+
+// Admin: Broadcast Server Alert
+app.post('/api/admin/broadcast-alert', authenticate, (req, res) => {
+    if (req.user.role !== 'owner') return res.status(403).json({ error: 'Owner only' });
+    const { alertMessage } = req.body;
+    if (alertMessage) {
+        io.emit('server_alert', { message: alertMessage, author: req.user.username });
+    }
+    res.json({ success: true });
+});
+
+// ANNOUNCEMENTS
 app.get('/api/announcements', authenticate, async (req, res) => {
     try {
         const result = await db.query(`
@@ -177,7 +204,7 @@ app.get('/api/announcements', authenticate, async (req, res) => {
 });
 
 app.post('/api/announcements', authenticate, async (req, res) => {
-    if (req.user.role !== 'owner') return res.status(403).json({ error: 'Only the owner can post announcements' });
+    if (req.user.role !== 'owner') return res.status(403).json({ error: 'Only owner can post announcements' });
     const { content } = req.body;
     try {
         const userRes = await db.query('SELECT avatar_url FROM users WHERE id = $1', [req.user.id]);
@@ -196,17 +223,51 @@ app.post('/api/announcements', authenticate, async (req, res) => {
 });
 
 app.delete('/api/announcements/:id', authenticate, async (req, res) => {
-    if (req.user.role !== 'owner') return res.status(403).json({ error: 'Only the owner can delete announcements' });
+    if (req.user.role !== 'owner') return res.status(403).json({ error: 'Only owner can delete' });
     try {
         await db.query('DELETE FROM announcements WHERE id = $1', [req.params.id]);
         io.emit('deleted_announcement', req.params.id);
         res.json({ success: true });
     } catch (err) {
-        res.status(500).json({ error: 'Failed to delete announcement' });
+        res.status(500).json({ error: 'Failed to delete' });
     }
 });
 
-// 6. FRIENDS & DMs
+// GENERAL CHAT (Public server channel)
+app.get('/api/general-messages', authenticate, async (req, res) => {
+    try {
+        const result = await db.query(`
+            SELECT g.*, u.avatar_url 
+            FROM general_messages g 
+            LEFT JOIN users u ON u.id = g.user_id 
+            ORDER BY g.created_at ASC
+        `);
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to fetch general messages' });
+    }
+});
+
+app.post('/api/general-messages', authenticate, async (req, res) => {
+    const { content } = req.body;
+    if (!content) return res.status(400).json({ error: 'Message empty' });
+    try {
+        const userRes = await db.query('SELECT avatar_url FROM users WHERE id = $1', [req.user.id]);
+        const avatarUrl = userRes.rows[0]?.avatar_url || null;
+
+        const result = await db.query(
+            'INSERT INTO general_messages (user_id, username, avatar_url, content) VALUES ($1, $2, $3, $4) RETURNING *',
+            [req.user.id, req.user.username, avatarUrl, content]
+        );
+        const msg = result.rows[0];
+        io.emit('new_general_message', msg);
+        res.json(msg);
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to post to general' });
+    }
+});
+
+// FRIENDS & DMs
 app.get('/api/friends', authenticate, async (req, res) => {
     try {
         const result = await db.query(`
@@ -291,14 +352,18 @@ io.on('connection', (socket) => {
     socket.on('send_dm', async ({ receiverId, content }) => {
         if (!currentUserId) return;
         try {
-            const userRes = await db.query('SELECT avatar_url FROM users WHERE id = $1', [currentUserId]);
-            const avatarUrl = userRes.rows[0]?.avatar_url || null;
+            const userRes = await db.query('SELECT avatar_url, username FROM users WHERE id = $1', [currentUserId]);
+            const senderUser = userRes.rows[0];
 
             const result = await db.query(
                 'INSERT INTO direct_messages (sender_id, receiver_id, content) VALUES ($1, $2, $3) RETURNING *',
                 [currentUserId, receiverId, content]
             );
-            const message = { ...result.rows[0], avatar_url: avatarUrl };
+            const message = { 
+                ...result.rows[0], 
+                avatar_url: senderUser?.avatar_url || null,
+                sender_username: senderUser?.username
+            };
 
             socket.emit('receive_dm', message);
 
@@ -311,6 +376,7 @@ io.on('connection', (socket) => {
         }
     });
 
+    // WebRTC Calling & Screen Share Signaling
     socket.on('call_user', ({ targetUserId, offer }) => {
         const target = activeSockets.get(parseInt(targetUserId, 10));
         if (target) {
@@ -329,6 +395,20 @@ io.on('connection', (socket) => {
         const target = activeSockets.get(parseInt(targetUserId, 10));
         if (target) {
             io.to(target.socketId).emit('ice_candidate', { candidate });
+        }
+    });
+
+    socket.on('renegotiate_offer', ({ targetUserId, offer }) => {
+        const target = activeSockets.get(parseInt(targetUserId, 10));
+        if (target) {
+            io.to(target.socketId).emit('renegotiate_offer', { fromUserId: currentUserId, offer });
+        }
+    });
+
+    socket.on('renegotiate_answer', ({ targetUserId, answer }) => {
+        const target = activeSockets.get(parseInt(targetUserId, 10));
+        if (target) {
+            io.to(target.socketId).emit('renegotiate_answer', { answer });
         }
     });
 
@@ -355,7 +435,6 @@ io.on('connection', (socket) => {
     });
 });
 
-// ================= SERVE STATIC FRONTEND ON RENDER =================
 app.use(express.static(path.join(__dirname, '../client')));
 
 app.get('*', (req, res) => {
