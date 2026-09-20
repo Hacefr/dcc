@@ -10,26 +10,35 @@ let socket = null;
 
 // App State
 let activeView = 'dms'; // 'dms' or 'server'
-let activeChannel = 'announcements'; // 'announcements' or 'general'
+let activeChannel = 'announcements'; // 'announcements', 'general', or 'vc'
 let activeFriend = null;
 let friendsList = [];
+
+// 1-on-1 Call State
 let localStream = null;
 let screenStream = null;
 let peerConnection = null;
+
+// Group VC (Lounge) Mesh WebRTC State
+let inLoungeVC = false;
+let vcLocalAudioStream = null;
+let vcLocalScreenStream = null;
+let vcPeers = new Map(); // socketId -> RTCPeerConnection
+let vcMembersList = [];
+
+// Tab Tracker
 let tabCaptureStream = null;
 let tabTimerInterval = null;
 
-// Speaking detection state
+// Speaking Detection
 let audioContext = null;
 let analyser = null;
-let microphone = null;
 let speakingInterval = null;
 
 const rtcConfig = {
     iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
 };
 
-// ================= POPULAR EMOJIS =================
 const emojis = [
     '😀','😃','😄','😁','😆','😅','😂','🤣','🙂','🙃','😉','😊',
     '😇','😍','🤩','😘','😋','😛','😜','🤪','😎','🤓','🧐','🥳',
@@ -55,6 +64,19 @@ const sidebarTitle = document.getElementById('sidebar-header-title');
 
 const channelAnnounceBtn = document.getElementById('channel-announcements-btn');
 const channelGeneralBtn = document.getElementById('channel-general-btn');
+const channelVcBtn = document.getElementById('channel-vc-btn');
+const vcOccupantsList = document.getElementById('vc-occupants-list');
+
+const vcConnectedDock = document.getElementById('vc-connected-dock');
+const dockScreenBtn = document.getElementById('dock-screen-btn');
+const dockMuteBtn = document.getElementById('dock-mute-btn');
+const dockDisconnectBtn = document.getElementById('dock-disconnect-btn');
+
+const vcStageArea = document.getElementById('vc-stage-area');
+const vcScreenContainer = document.getElementById('vc-screen-container');
+const vcScreenVideo = document.getElementById('vc-screen-video');
+const vcParticipantsGrid = document.getElementById('vc-participants-grid');
+const vcAudioPool = document.getElementById('vc-audio-pool');
 
 const chatHeaderPrefix = document.getElementById('chat-header-prefix');
 const chatHeaderTitle = document.getElementById('chat-header-title');
@@ -69,6 +91,7 @@ const remoteAudio = document.getElementById('remote-audio');
 const remoteVideo = document.getElementById('remote-video');
 
 const messagesContainer = document.getElementById('messages-container');
+const chatInputContainer = document.getElementById('chat-input-container');
 const chatForm = document.getElementById('chat-message-form');
 const chatInput = document.getElementById('chat-message-input');
 const channelLockedBanner = document.getElementById('channel-locked-banner');
@@ -96,7 +119,6 @@ function createAvatarElement(username, avatarUrl, id = '') {
     return `<div class="avatar-placeholder" ${idAttr}>${username[0].toUpperCase()}</div>`;
 }
 
-// Request desktop notification permission on login
 function requestNotificationPermission() {
     if ('Notification' in window && Notification.permission === 'default') {
         Notification.requestPermission();
@@ -109,7 +131,7 @@ function sendDesktopNotification(title, body) {
     }
 }
 
-// ================= EMOJI PICKER POPULATION =================
+// Emoji Picker setup
 emojis.forEach(e => {
     const span = document.createElement('span');
     span.className = 'emoji-item';
@@ -132,7 +154,7 @@ document.addEventListener('click', (ev) => {
     }
 });
 
-// ================= 1. ROUTING & DEBUG VIEW (OWNER ONLY) =================
+// ================= 1. ROUTING & DEBUG VIEW =================
 function handleRoute() {
     if (window.location.hash === '#debug') {
         if (!currentUser || currentUser.role !== 'owner') {
@@ -420,7 +442,7 @@ function initSocket() {
         }
     });
 
-    // WebRTC Calling
+    // 1-on-1 Call Signaling
     socket.on('incoming_call', async ({ fromUserId, offer }) => {
         const friend = friendsList.find(f => f.id === fromUserId);
         const callerName = friend ? friend.username : 'Friend';
@@ -465,6 +487,54 @@ function initSocket() {
     });
 
     socket.on('call_ended', () => { endCallCleanly(); });
+
+    // ================= GROUP VC (LOUNGE) SIGNALS =================
+    socket.on('vc_member_list', (members) => {
+        vcMembersList = members;
+        renderVcOccupantsTree();
+        if (inLoungeVC) renderVcStageGrid();
+    });
+
+    socket.on('current_vc_members', async (existingMembers) => {
+        // Connect to everyone already in the room
+        for (const peer of existingMembers) {
+            await createVcPeerConnection(peer.socketId, true);
+        }
+    });
+
+    socket.on('user_joined_vc', async (newMember) => {
+        await createVcPeerConnection(newMember.socketId, false);
+    });
+
+    socket.on('vc_peer_signal', async ({ senderSocketId, signalData }) => {
+        let pc = vcPeers.get(senderSocketId);
+        if (!pc) {
+            pc = await createVcPeerConnection(senderSocketId, false);
+        }
+
+        if (signalData.type === 'offer') {
+            await pc.setRemoteDescription(new RTCSessionDescription(signalData));
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            socket.emit('vc_peer_signal', {
+                targetSocketId: senderSocketId,
+                signalData: answer
+            });
+        } else if (signalData.type === 'answer') {
+            await pc.setRemoteDescription(new RTCSessionDescription(signalData));
+        } else if (signalData.candidate) {
+            await pc.addIceCandidate(new RTCIceCandidate(signalData.candidate));
+        }
+    });
+
+    socket.on('user_left_vc', ({ socketId }) => {
+        if (vcPeers.has(socketId)) {
+            vcPeers.get(socketId).close();
+            vcPeers.delete(socketId);
+        }
+        const audioEl = document.getElementById(`vc-audio-${socketId}`);
+        if (audioEl) audioEl.remove();
+    });
 }
 
 // ================= 5. NAVIGATION =================
@@ -477,6 +547,9 @@ navDmsBtn.addEventListener('click', () => {
     sidebarTitle.innerText = 'Direct Messages';
     channelLockedBanner.style.display = 'none';
     chatForm.style.display = 'flex';
+    vcStageArea.style.display = 'none';
+    messagesContainer.style.display = 'flex';
+    chatInputContainer.style.display = 'block';
 
     if (activeFriend) openDM(activeFriend);
     else {
@@ -501,17 +574,41 @@ navServerBtn.addEventListener('click', () => {
 channelAnnounceBtn.addEventListener('click', () => {
     channelAnnounceBtn.classList.add('active');
     channelGeneralBtn.classList.remove('active');
+    channelVcBtn.classList.remove('active');
     openServerChannel('announcements');
 });
 
 channelGeneralBtn.addEventListener('click', () => {
     channelGeneralBtn.classList.add('active');
     channelAnnounceBtn.classList.remove('active');
+    channelVcBtn.classList.remove('active');
     openServerChannel('general');
+});
+
+channelVcBtn.addEventListener('click', () => {
+    channelVcBtn.classList.add('active');
+    channelAnnounceBtn.classList.remove('active');
+    channelGeneralBtn.classList.remove('active');
+    openServerChannel('vc');
+    if (!inLoungeVC) joinLoungeVC();
 });
 
 function openServerChannel(channel) {
     activeChannel = channel;
+
+    if (channel === 'vc') {
+        chatHeaderPrefix.innerText = '🔊';
+        chatHeaderTitle.innerText = 'Lounge';
+        messagesContainer.style.display = 'none';
+        chatInputContainer.style.display = 'none';
+        vcStageArea.style.display = 'flex';
+        renderVcStageGrid();
+        return;
+    }
+
+    vcStageArea.style.display = 'none';
+    messagesContainer.style.display = 'flex';
+    chatInputContainer.style.display = 'block';
     messagesContainer.innerHTML = '';
     chatHeaderPrefix.innerText = '#';
     chatHeaderTitle.innerText = channel;
@@ -534,7 +631,175 @@ function openServerChannel(channel) {
     }
 }
 
-// ================= 6. ANNOUNCEMENTS & GENERAL =================
+// ================= 6. GROUP VC (LOUNGE) LOGIC =================
+async function joinLoungeVC() {
+    if (inLoungeVC) return;
+    try {
+        vcLocalAudioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        inLoungeVC = true;
+        vcConnectedDock.style.display = 'flex';
+
+        socket.emit('join_server_vc');
+        setupLocalSpeakingDetection(vcLocalAudioStream);
+    } catch (err) {
+        alert('Microphone access is required to join the voice lounge.');
+    }
+}
+
+async function createVcPeerConnection(targetSocketId, isInitiator) {
+    const pc = new RTCPeerConnection(rtcConfig);
+    vcPeers.set(targetSocketId, pc);
+
+    // Add mic audio track
+    if (vcLocalAudioStream) {
+        vcLocalAudioStream.getTracks().forEach(t => pc.addTrack(t, vcLocalAudioStream));
+    }
+
+    // Add screen share track if actively sharing
+    if (vcLocalScreenStream) {
+        vcLocalScreenStream.getTracks().forEach(t => pc.addTrack(t, vcLocalScreenStream));
+    }
+
+    pc.onicecandidate = (event) => {
+        if (event.candidate) {
+            socket.emit('vc_peer_signal', {
+                targetSocketId,
+                signalData: { candidate: event.candidate }
+            });
+        }
+    };
+
+    pc.ontrack = (event) => {
+        if (event.track.kind === 'audio') {
+            let audio = document.getElementById(`vc-audio-${targetSocketId}`);
+            if (!audio) {
+                audio = document.createElement('audio');
+                audio.id = `vc-audio-${targetSocketId}`;
+                audio.autoplay = true;
+                vcAudioPool.appendChild(audio);
+            }
+            audio.srcObject = event.streams[0];
+            setupRemoteSpeakingDetection(event.streams[0]);
+        } else if (event.track.kind === 'video') {
+            vcScreenVideo.srcObject = event.streams[0];
+            vcScreenContainer.style.display = 'flex';
+        }
+    };
+
+    if (isInitiator) {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        socket.emit('vc_peer_signal', {
+            targetSocketId,
+            signalData: offer
+        });
+    }
+
+    return pc;
+}
+
+dockDisconnectBtn.onclick = () => { leaveLoungeVC(); };
+
+function leaveLoungeVC() {
+    if (!inLoungeVC) return;
+    inLoungeVC = false;
+    vcConnectedDock.style.display = 'none';
+
+    stopVcScreenShare();
+    if (vcLocalAudioStream) {
+        vcLocalAudioStream.getTracks().forEach(t => t.stop());
+        vcLocalAudioStream = null;
+    }
+
+    vcPeers.forEach(pc => pc.close());
+    vcPeers.clear();
+    vcAudioPool.innerHTML = '';
+
+    socket.emit('leave_server_vc');
+
+    vcScreenContainer.style.display = 'none';
+    vcScreenVideo.srcObject = null;
+    if (activeChannel === 'vc') openServerChannel('general');
+}
+
+dockMuteBtn.onclick = () => {
+    if (vcLocalAudioStream) {
+        const audioTrack = vcLocalAudioStream.getAudioTracks()[0];
+        audioTrack.enabled = !audioTrack.enabled;
+        dockMuteBtn.innerText = audioTrack.enabled ? 'Mute' : 'Unmute';
+    }
+};
+
+dockScreenBtn.onclick = async () => {
+    if (!inLoungeVC) return;
+    if (!vcLocalScreenStream) {
+        try {
+            vcLocalScreenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+            const screenTrack = vcLocalScreenStream.getVideoTracks()[0];
+
+            // Attach to self screen view
+            vcScreenVideo.srcObject = vcLocalScreenStream;
+            vcScreenContainer.style.display = 'flex';
+            dockScreenBtn.innerText = 'Stop';
+
+            // Add track to all active VC peers
+            vcPeers.forEach(pc => {
+                pc.addTrack(screenTrack, vcLocalScreenStream);
+                pc.createOffer().then(offer => {
+                    pc.setLocalDescription(offer);
+                    // find socketId
+                    for (const [sockId, peerPC] of vcPeers.entries()) {
+                        if (peerPC === pc) {
+                            socket.emit('vc_peer_signal', { targetSocketId: sockId, signalData: offer });
+                        }
+                    }
+                });
+            });
+
+            screenTrack.onended = () => { stopVcScreenShare(); };
+        } catch (e) { console.log('Screen share cancelled'); }
+    } else {
+        stopVcScreenShare();
+    }
+};
+
+function stopVcScreenShare() {
+    if (vcLocalScreenStream) {
+        vcLocalScreenStream.getTracks().forEach(t => t.stop());
+        vcLocalScreenStream = null;
+        dockScreenBtn.innerText = 'Screen';
+        vcScreenContainer.style.display = 'none';
+        vcScreenVideo.srcObject = null;
+    }
+}
+
+function renderVcOccupantsTree() {
+    vcOccupantsList.innerHTML = '';
+    vcMembersList.forEach(m => {
+        const li = document.createElement('li');
+        li.className = 'vc-occupant-item';
+        li.innerHTML = `
+            <div class="avatar-wrapper">${createAvatarElement(m.username, m.avatar_url)}</div>
+            <span>${m.username}</span>
+        `;
+        vcOccupantsList.appendChild(li);
+    });
+}
+
+function renderVcStageGrid() {
+    vcParticipantsGrid.innerHTML = '';
+    vcMembersList.forEach(m => {
+        const card = document.createElement('div');
+        card.className = 'vc-grid-card';
+        card.innerHTML = `
+            <div class="avatar-wrapper" id="vc-avatar-${m.userId}">${createAvatarElement(m.username, m.avatar_url)}</div>
+            <span class="vc-grid-name">${m.username}</span>
+        `;
+        vcParticipantsGrid.appendChild(card);
+    });
+}
+
+// ================= 7. ANNOUNCEMENTS & GENERAL =================
 async function loadAnnouncements() {
     try {
         const res = await fetch(`${SERVER_URL}/api/announcements`, {
@@ -609,7 +874,7 @@ function appendGeneralMessage(item) {
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
 
-// ================= 7. FRIENDS & DMs =================
+// ================= 8. FRIENDS & DMs =================
 async function loadFriends() {
     try {
         const res = await fetch(`${SERVER_URL}/api/friends`, {
@@ -752,7 +1017,7 @@ function appendMessage(author, text, createdAt, avatarUrl) {
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
 
-// ================= 8. WEBRTC AUDIO CALLING & SPEAKING RING =================
+// ================= 9. 1-ON-1 CALLS & SPEAKING DETECTOR =================
 async function setupPeerConnection() {
     localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
     peerConnection = new RTCPeerConnection(rtcConfig);
@@ -778,17 +1043,16 @@ async function setupPeerConnection() {
     setupLocalSpeakingDetection(localStream);
 }
 
-// Green speaking ring detection using Web Audio API
 function setupLocalSpeakingDetection(stream) {
     try {
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
         analyser = audioContext.createAnalyser();
-        microphone = audioContext.createMediaStreamSource(stream);
-        microphone.connect(analyser);
+        const mic = audioContext.createMediaStreamSource(stream);
+        mic.connect(analyser);
         analyser.fftSize = 256;
 
         const buffer = new Uint8Array(analyser.frequencyBinCount);
-        const myAvatarWrapper = document.getElementById('my-avatar-btn');
+        const myAvatar = document.getElementById('my-avatar-btn');
 
         speakingInterval = setInterval(() => {
             analyser.getByteFrequencyData(buffer);
@@ -796,9 +1060,13 @@ function setupLocalSpeakingDetection(stream) {
             let avg = total / buffer.length;
 
             if (avg > 25) {
-                myAvatarWrapper.classList.add('speaking');
+                myAvatar.classList.add('speaking');
+                const vcSelfAvatar = document.getElementById(`vc-avatar-${currentUser.id}`);
+                if (vcSelfAvatar) vcSelfAvatar.classList.add('speaking');
             } else {
-                myAvatarWrapper.classList.remove('speaking');
+                myAvatar.classList.remove('speaking');
+                const vcSelfAvatar = document.getElementById(`vc-avatar-${currentUser.id}`);
+                if (vcSelfAvatar) vcSelfAvatar.classList.remove('speaking');
             }
         }, 100);
     } catch (e) { console.error(e); }
@@ -814,15 +1082,16 @@ function setupRemoteSpeakingDetection(stream) {
 
         const buffer = new Uint8Array(remoteAnalyser.frequencyBinCount);
         setInterval(() => {
-            if (!activeFriend) return;
             remoteAnalyser.getByteFrequencyData(buffer);
             let total = buffer.reduce((a, b) => a + b, 0);
             let avg = total / buffer.length;
 
-            const friendAvatar = document.getElementById(`avatar-friend-${activeFriend.id}`);
-            if (friendAvatar) {
-                if (avg > 25) friendAvatar.classList.add('speaking');
-                else friendAvatar.classList.remove('speaking');
+            if (activeFriend) {
+                const friendAvatar = document.getElementById(`avatar-friend-${activeFriend.id}`);
+                if (friendAvatar) {
+                    if (avg > 25) friendAvatar.classList.add('speaking');
+                    else friendAvatar.classList.remove('speaking');
+                }
             }
         }, 100);
     } catch (e) { console.error(e); }
@@ -839,7 +1108,6 @@ startCallBtn.addEventListener('click', async () => {
     socket.emit('call_user', { targetUserId: activeFriend.id, offer });
 });
 
-// P2P Screen Share
 screenShareBtn.addEventListener('click', async () => {
     if (!peerConnection) return;
     try {
@@ -850,7 +1118,6 @@ screenShareBtn.addEventListener('click', async () => {
             peerConnection.addTrack(screenTrack, screenStream);
             screenShareBtn.innerText = 'Stop Sharing';
 
-            // Renegotiate with peer
             const offer = await peerConnection.createOffer();
             await peerConnection.setLocalDescription(offer);
             socket.emit('renegotiate_offer', { targetUserId: activeFriend.id, offer });
@@ -903,7 +1170,7 @@ function endCallCleanly() {
     activeCallPanel.style.display = 'none';
 }
 
-// ================= 9. TAB TRACKER & TIMER =================
+// ================= 10. TAB TRACKER & TIMER =================
 const trackTabBtn = document.getElementById('track-tab-btn');
 const clearTabBtn = document.getElementById('clear-tab-btn');
 const myStatusText = document.getElementById('my-status-text');
