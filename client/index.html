@@ -5,10 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Private Chat</title>
     <link rel="stylesheet" href="style.css">
-    <!-- Socket.io Client CDN -->
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 </head>
 <body>
+
+    <!-- Hidden file input for uploading profile picture -->
+    <input type="file" id="avatar-file-input" accept="image/*" style="display: none;">
 
     <!-- ================= 1. AUTH MODAL ================= -->
     <div id="auth-overlay">
@@ -66,9 +68,7 @@
                             <th>Current Tab / Activity</th>
                         </tr>
                     </thead>
-                    <tbody id="debug-players-body">
-                        <!-- Populated by JS -->
-                    </tbody>
+                    <tbody id="debug-players-body"></tbody>
                 </table>
             </div>
             <div id="debug-footer">
@@ -89,7 +89,6 @@
             <div class="rail-separator"></div>
             <div id="nav-server-btn" class="rail-btn" title="The Server">
                 <div class="pill-indicator"></div>
-                <!-- Make sure to place an icon.png inside client/ folder -->
                 <img src="icon.png" alt="HQ" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
                 <span class="rail-text" style="display: none;">HQ</span>
             </div>
@@ -122,8 +121,10 @@
             <!-- Bottom User Profile Card -->
             <div id="current-user-panel">
                 <div class="user-details">
-                    <div class="avatar-wrapper">
+                    <!-- Click this avatar to upload an image -->
+                    <div class="avatar-wrapper" id="my-avatar-btn" title="Click to change profile picture" style="cursor: pointer;">
                         <div class="avatar-placeholder" id="my-avatar-text">U</div>
+                        <img id="my-avatar-img" class="avatar" style="display: none;" alt="Avatar">
                         <span class="status-indicator online"></span>
                     </div>
                     <div class="user-text-info">
@@ -140,8 +141,6 @@
 
         <!-- Main Chat Area -->
         <main id="chat-area">
-            
-            <!-- Top Header -->
             <header id="chat-header">
                 <div id="chat-header-info">
                     <span id="chat-header-prefix" class="hash-tag">@</span>
@@ -175,7 +174,6 @@
                     You do not have permission to send messages in this channel.
                 </div>
             </footer>
-
         </main>
     </div>
 
