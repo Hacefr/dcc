@@ -1,11 +1,7 @@
 const SERVER_URL = window.location.origin;
 
-// Enable GitHub-flavored Markdown and automatic newlines
 if (typeof marked !== 'undefined') {
-    marked.setOptions({
-        breaks: true,
-        gfm: true
-    });
+    marked.setOptions({ breaks: true, gfm: true });
 }
 
 let token = localStorage.getItem('token');
@@ -13,17 +9,35 @@ let currentUser = JSON.parse(localStorage.getItem('user'));
 let socket = null;
 
 // App State
-let activeView = 'dms';
+let activeView = 'dms'; // 'dms' or 'server'
+let activeChannel = 'announcements'; // 'announcements' or 'general'
 let activeFriend = null;
 let friendsList = [];
 let localStream = null;
+let screenStream = null;
 let peerConnection = null;
 let tabCaptureStream = null;
 let tabTimerInterval = null;
 
+// Speaking detection state
+let audioContext = null;
+let analyser = null;
+let microphone = null;
+let speakingInterval = null;
+
 const rtcConfig = {
     iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
 };
+
+// ================= POPULAR EMOJIS =================
+const emojis = [
+    '😀','😃','😄','😁','😆','😅','😂','🤣','🙂','🙃','😉','😊',
+    '😇','😍','🤩','😘','😋','😛','😜','🤪','😎','🤓','🧐','🥳',
+    '😏','😒','😞','😢','😭','😤','😠','😡','🤬','🤯','😳','🥶',
+    '😱','😨','😰','🤔','🤫','🤭','😴','💀','☠️','👻','🤡','💩',
+    '👋','👌','✌️','🤞','🤟','🤙','👍','👎','👏','🙌','🤝','🔥',
+    '✨','🎉','💯','❤️','💔','🎮','💻','🚀','👀','🍕','🍔','☕'
+];
 
 // ================= DOM ELEMENTS =================
 const authOverlay = document.getElementById('auth-overlay');
@@ -39,15 +53,20 @@ const dmsSection = document.getElementById('dms-sidebar-section');
 const serverSection = document.getElementById('server-sidebar-section');
 const sidebarTitle = document.getElementById('sidebar-header-title');
 
+const channelAnnounceBtn = document.getElementById('channel-announcements-btn');
+const channelGeneralBtn = document.getElementById('channel-general-btn');
+
 const chatHeaderPrefix = document.getElementById('chat-header-prefix');
 const chatHeaderTitle = document.getElementById('chat-header-title');
 const callHeaderAction = document.getElementById('call-header-action');
 const startCallBtn = document.getElementById('start-call-btn');
 const activeCallPanel = document.getElementById('active-call-panel');
 const callStatusText = document.getElementById('call-status-text');
+const screenShareBtn = document.getElementById('screen-share-btn');
 const muteMicBtn = document.getElementById('mute-mic-btn');
 const endCallBtn = document.getElementById('end-call-btn');
 const remoteAudio = document.getElementById('remote-audio');
+const remoteVideo = document.getElementById('remote-video');
 
 const messagesContainer = document.getElementById('messages-container');
 const chatForm = document.getElementById('chat-message-form');
@@ -56,24 +75,71 @@ const channelLockedBanner = document.getElementById('channel-locked-banner');
 
 const debugOverlay = document.getElementById('debug-overlay');
 const closeDebugBtn = document.getElementById('close-debug-btn');
+const broadcastInput = document.getElementById('broadcast-input');
+const sendBroadcastBtn = document.getElementById('send-broadcast-btn');
+const serverAlertBanner = document.getElementById('server-alert-banner');
+const alertBannerText = document.getElementById('alert-banner-text');
 
-// Avatar Upload Elements
 const avatarFileInput = document.getElementById('avatar-file-input');
 const myAvatarBtn = document.getElementById('my-avatar-btn');
 const myAvatarImg = document.getElementById('my-avatar-img');
 const myAvatarText = document.getElementById('my-avatar-text');
 
-// Helper to render Avatar Bubble (strictly styled circular avatar)
-function createAvatarElement(username, avatarUrl) {
+const emojiPicker = document.getElementById('emoji-picker');
+const emojiToggleBtn = document.getElementById('emoji-toggle-btn');
+
+function createAvatarElement(username, avatarUrl, id = '') {
+    const idAttr = id ? `id="avatar-${id}"` : '';
     if (avatarUrl) {
-        return `<img src="${avatarUrl}" class="avatar" alt="${username}">`;
+        return `<img src="${avatarUrl}" class="avatar" ${idAttr} alt="${username}">`;
     }
-    return `<div class="avatar-placeholder">${username[0].toUpperCase()}</div>`;
+    return `<div class="avatar-placeholder" ${idAttr}>${username[0].toUpperCase()}</div>`;
 }
 
-// ================= 1. ROUTING & DEBUG VIEW =================
+// Request desktop notification permission on login
+function requestNotificationPermission() {
+    if ('Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission();
+    }
+}
+
+function sendDesktopNotification(title, body) {
+    if ('Notification' in window && Notification.permission === 'granted' && document.hidden) {
+        new Notification(title, { body, icon: 'icon.png' });
+    }
+}
+
+// ================= EMOJI PICKER POPULATION =================
+emojis.forEach(e => {
+    const span = document.createElement('span');
+    span.className = 'emoji-item';
+    span.innerText = e;
+    span.onclick = () => {
+        chatInput.value += e;
+        chatInput.focus();
+    };
+    emojiPicker.appendChild(span);
+});
+
+emojiToggleBtn.onclick = (ev) => {
+    ev.stopPropagation();
+    emojiPicker.style.display = emojiPicker.style.display === 'none' ? 'grid' : 'none';
+};
+
+document.addEventListener('click', (ev) => {
+    if (!emojiPicker.contains(ev.target) && ev.target !== emojiToggleBtn) {
+        emojiPicker.style.display = 'none';
+    }
+});
+
+// ================= 1. ROUTING & DEBUG VIEW (OWNER ONLY) =================
 function handleRoute() {
     if (window.location.hash === '#debug') {
+        if (!currentUser || currentUser.role !== 'owner') {
+            alert('Access Denied: The debug console is restricted to the Owner.');
+            window.location.hash = '';
+            return;
+        }
         openDebugView();
     } else {
         debugOverlay.style.display = 'none';
@@ -81,14 +147,15 @@ function handleRoute() {
 }
 
 window.addEventListener('hashchange', handleRoute);
-closeDebugBtn.addEventListener('click', () => {
-    window.location.hash = '';
-});
+closeDebugBtn.addEventListener('click', () => { window.location.hash = ''; });
 
 async function openDebugView() {
     debugOverlay.style.display = 'flex';
     try {
-        const res = await fetch(`${SERVER_URL}/api/debug`);
+        const res = await fetch(`${SERVER_URL}/api/debug`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!res.ok) throw new Error('Forbidden');
         const data = await res.json();
 
         document.getElementById('debug-sys-date').innerText = `System Date: ${data.system_date}`;
@@ -100,19 +167,56 @@ async function openDebugView() {
 
         data.players.forEach(p => {
             const tr = document.createElement('tr');
+            const resetBtn = p.role !== 'owner' 
+                ? `<button class="btn-reset-pw" onclick="resetUserPassword(${p.id}, '${p.username}')">Reset PW</button>`
+                : '';
+
             tr.innerHTML = `
                 <td><strong>${p.username}</strong></td>
                 <td><span class="${p.role === 'owner' ? 'author-tag' : ''}">${p.role}</span></td>
                 <td><span class="${p.is_online ? 'status-online' : 'status-offline'}">${p.is_online ? 'Online' : 'Offline'}</span></td>
                 <td>${p.playtime_dmy}</td>
                 <td>${p.current_tab}</td>
+                <td>${resetBtn}</td>
             `;
             tbody.appendChild(tr);
         });
     } catch (err) {
-        console.error('Failed to load debug data', err);
+        alert('Failed to load debug statistics: ' + err.message);
+        window.location.hash = '';
     }
 }
+
+window.resetUserPassword = async function(targetUserId, username) {
+    const newPassword = prompt(`Enter new password for ${username}:`);
+    if (!newPassword) return;
+
+    const res = await fetch(`${SERVER_URL}/api/admin/reset-password`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ targetUserId, newPassword })
+    });
+    const data = await res.json();
+    alert(data.message || data.error);
+};
+
+sendBroadcastBtn.onclick = async () => {
+    const alertMessage = broadcastInput.value.trim();
+    if (!alertMessage) return;
+    await fetch(`${SERVER_URL}/api/admin/broadcast-alert`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ alertMessage })
+    });
+    broadcastInput.value = '';
+    alert('Alert broadcasted to all online users.');
+};
 
 // ================= 2. AUTHENTICATION =================
 document.getElementById('to-signup').addEventListener('click', () => {
@@ -200,15 +304,14 @@ function initApp() {
     const cachedAvatar = localStorage.getItem('my_local_avatar') || currentUser.avatar_url;
     updateMyAvatarDisplay(cachedAvatar);
 
+    requestNotificationPermission();
     initSocket();
     loadFriends();
     handleRoute();
 }
 
 // ================= 3. PROFILE PICTURE UPLOAD =================
-myAvatarBtn.addEventListener('click', () => {
-    avatarFileInput.click();
-});
+myAvatarBtn.addEventListener('click', () => { avatarFileInput.click(); });
 
 avatarFileInput.addEventListener('change', (e) => {
     const file = e.target.files[0];
@@ -261,6 +364,11 @@ function initSocket() {
         socket.emit('user_connected', currentUser.id);
     });
 
+    socket.on('server_alert', ({ message, author }) => {
+        alertBannerText.innerText = `[Announcement from ${author}]: ${message}`;
+        serverAlertBanner.style.display = 'flex';
+    });
+
     socket.on('user_status_changed', ({ userId, is_online }) => {
         const friend = friendsList.find(f => f.id === userId);
         if (friend) {
@@ -290,11 +398,13 @@ function initSocket() {
            (message.sender_id === activeFriend.id || message.sender_id === currentUser.id)) {
             const author = message.sender_id === currentUser.id ? currentUser.username : activeFriend.username;
             appendMessage(author, message.content, message.created_at, message.avatar_url);
+        } else if (message.sender_id !== currentUser.id) {
+            sendDesktopNotification(`New message from ${message.sender_username || 'Friend'}`, message.content);
         }
     });
 
     socket.on('new_announcement', (announcement) => {
-        if (activeView === 'server') {
+        if (activeView === 'server' && activeChannel === 'announcements') {
             appendAnnouncement(announcement);
         }
     });
@@ -304,9 +414,18 @@ function initSocket() {
         if (el) el.remove();
     });
 
+    socket.on('new_general_message', (msg) => {
+        if (activeView === 'server' && activeChannel === 'general') {
+            appendGeneralMessage(msg);
+        }
+    });
+
+    // WebRTC Calling
     socket.on('incoming_call', async ({ fromUserId, offer }) => {
         const friend = friendsList.find(f => f.id === fromUserId);
         const callerName = friend ? friend.username : 'Friend';
+        sendDesktopNotification('Incoming Call', `${callerName} is calling you!`);
+
         if (confirm(`Incoming voice call from ${callerName}. Accept?`)) {
             activeFriend = friend;
             await setupPeerConnection();
@@ -330,9 +449,22 @@ function initSocket() {
         }
     });
 
-    socket.on('call_ended', () => {
-        endCallCleanly();
+    socket.on('renegotiate_offer', async ({ fromUserId, offer }) => {
+        if (peerConnection) {
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            socket.emit('renegotiate_answer', { targetUserId: fromUserId, answer });
+        }
     });
+
+    socket.on('renegotiate_answer', async ({ answer }) => {
+        if (peerConnection) {
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+        }
+    });
+
+    socket.on('call_ended', () => { endCallCleanly(); });
 }
 
 // ================= 5. NAVIGATION =================
@@ -363,33 +495,54 @@ navServerBtn.addEventListener('click', () => {
     serverSection.style.display = 'block';
     sidebarTitle.innerText = 'The Server';
     callHeaderAction.style.display = 'none';
-    openAnnouncements();
+    openServerChannel(activeChannel);
 });
 
-// ================= 6. ANNOUNCEMENTS =================
-async function openAnnouncements() {
-    chatHeaderPrefix.innerText = '#';
-    chatHeaderTitle.innerText = 'announcements';
-    messagesContainer.innerHTML = '';
+channelAnnounceBtn.addEventListener('click', () => {
+    channelAnnounceBtn.classList.add('active');
+    channelGeneralBtn.classList.remove('active');
+    openServerChannel('announcements');
+});
 
-    if (currentUser.role === 'owner') {
+channelGeneralBtn.addEventListener('click', () => {
+    channelGeneralBtn.classList.add('active');
+    channelAnnounceBtn.classList.remove('active');
+    openServerChannel('general');
+});
+
+function openServerChannel(channel) {
+    activeChannel = channel;
+    messagesContainer.innerHTML = '';
+    chatHeaderPrefix.innerText = '#';
+    chatHeaderTitle.innerText = channel;
+
+    if (channel === 'announcements') {
+        if (currentUser.role === 'owner') {
+            channelLockedBanner.style.display = 'none';
+            chatForm.style.display = 'flex';
+            chatInput.placeholder = 'Post announcement as Owner...';
+        } else {
+            chatForm.style.display = 'none';
+            channelLockedBanner.style.display = 'block';
+        }
+        loadAnnouncements();
+    } else if (channel === 'general') {
         channelLockedBanner.style.display = 'none';
         chatForm.style.display = 'flex';
-        chatInput.placeholder = 'Post announcement as Owner... (Shift+Enter for newline)';
-    } else {
-        chatForm.style.display = 'none';
-        channelLockedBanner.style.display = 'block';
+        chatInput.placeholder = 'Message #general...';
+        loadGeneralMessages();
     }
+}
 
+// ================= 6. ANNOUNCEMENTS & GENERAL =================
+async function loadAnnouncements() {
     try {
         const res = await fetch(`${SERVER_URL}/api/announcements`, {
             headers: { 'Authorization': `Bearer ${token}` }
         });
-        const announcements = await res.json();
-        announcements.forEach(appendAnnouncement);
-    } catch (err) {
-        console.error(err);
-    }
+        const items = await res.json();
+        items.forEach(appendAnnouncement);
+    } catch (err) { console.error(err); }
 }
 
 function appendAnnouncement(item) {
@@ -427,6 +580,35 @@ window.deleteAnnouncement = async function(id) {
     });
 };
 
+async function loadGeneralMessages() {
+    try {
+        const res = await fetch(`${SERVER_URL}/api/general-messages`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const items = await res.json();
+        items.forEach(appendGeneralMessage);
+    } catch (err) { console.error(err); }
+}
+
+function appendGeneralMessage(item) {
+    const msg = document.createElement('div');
+    msg.className = 'message';
+    const date = new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    msg.innerHTML = `
+        <div class="avatar-wrapper">${createAvatarElement(item.username, item.avatar_url)}</div>
+        <div class="message-content">
+            <div class="message-header">
+                <span class="message-author">${item.username}</span>
+                <span class="message-time">${date}</span>
+            </div>
+            <p class="message-body">${item.content}</p>
+        </div>
+    `;
+    messagesContainer.appendChild(msg);
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
+
 // ================= 7. FRIENDS & DMs =================
 async function loadFriends() {
     try {
@@ -435,9 +617,7 @@ async function loadFriends() {
         });
         friendsList = await res.json();
         renderFriendsList();
-    } catch (err) {
-        console.error(err);
-    }
+    } catch (err) { console.error(err); }
 }
 
 function renderFriendsList() {
@@ -455,7 +635,7 @@ function renderFriendsList() {
 
         li.innerHTML = `
             <div class="avatar-wrapper">
-                ${createAvatarElement(friend.username, friend.avatar_url)}
+                ${createAvatarElement(friend.username, friend.avatar_url, `friend-${friend.id}`)}
                 <span class="status-indicator ${friend.is_online ? 'online' : 'offline'}"></span>
             </div>
             <div class="friend-info">
@@ -489,9 +669,7 @@ document.getElementById('add-friend-form').addEventListener('submit', async (e) 
             const data = await res.json();
             alert(data.error || 'Failed to add friend');
         }
-    } catch (err) {
-        console.error(err);
-    }
+    } catch (err) { console.error(err); }
 });
 
 async function openDM(friend) {
@@ -513,12 +691,9 @@ async function openDM(friend) {
             const author = m.sender_id === currentUser.id ? currentUser.username : friend.username;
             appendMessage(author, m.content, m.created_at, m.avatar_url);
         });
-    } catch (err) {
-        console.error(err);
-    }
+    } catch (err) { console.error(err); }
 }
 
-// Handle Enter to send, Shift+Enter for new line
 chatInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
@@ -532,20 +707,30 @@ chatForm.addEventListener('submit', async (e) => {
     if (!text) return;
 
     if (activeView === 'server') {
-        await fetch(`${SERVER_URL}/api/announcements`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`
-            },
-            body: JSON.stringify({ content: text })
-        });
+        if (activeChannel === 'announcements') {
+            await fetch(`${SERVER_URL}/api/announcements`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ content: text })
+            });
+        } else if (activeChannel === 'general') {
+            await fetch(`${SERVER_URL}/api/general-messages`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ content: text })
+            });
+        }
     } else if (activeView === 'dms' && activeFriend) {
         socket.emit('send_dm', { receiverId: activeFriend.id, content: text });
     }
 
     chatInput.value = '';
-    chatInput.style.height = 'auto';
 });
 
 function appendMessage(author, text, createdAt, avatarUrl) {
@@ -567,7 +752,7 @@ function appendMessage(author, text, createdAt, avatarUrl) {
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
 
-// ================= 8. WEBRTC AUDIO CALLING =================
+// ================= 8. WEBRTC AUDIO CALLING & SPEAKING RING =================
 async function setupPeerConnection() {
     localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
     peerConnection = new RTCPeerConnection(rtcConfig);
@@ -575,7 +760,13 @@ async function setupPeerConnection() {
     localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
 
     peerConnection.ontrack = (event) => {
-        remoteAudio.srcObject = event.streams[0];
+        if (event.track.kind === 'video') {
+            remoteVideo.srcObject = event.streams[0];
+            remoteVideo.style.display = 'block';
+        } else if (event.track.kind === 'audio') {
+            remoteAudio.srcObject = event.streams[0];
+            setupRemoteSpeakingDetection(event.streams[0]);
+        }
     };
 
     peerConnection.onicecandidate = (event) => {
@@ -583,6 +774,58 @@ async function setupPeerConnection() {
             socket.emit('ice_candidate', { targetUserId: activeFriend.id, candidate: event.candidate });
         }
     };
+
+    setupLocalSpeakingDetection(localStream);
+}
+
+// Green speaking ring detection using Web Audio API
+function setupLocalSpeakingDetection(stream) {
+    try {
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        analyser = audioContext.createAnalyser();
+        microphone = audioContext.createMediaStreamSource(stream);
+        microphone.connect(analyser);
+        analyser.fftSize = 256;
+
+        const buffer = new Uint8Array(analyser.frequencyBinCount);
+        const myAvatarWrapper = document.getElementById('my-avatar-btn');
+
+        speakingInterval = setInterval(() => {
+            analyser.getByteFrequencyData(buffer);
+            let total = buffer.reduce((a, b) => a + b, 0);
+            let avg = total / buffer.length;
+
+            if (avg > 25) {
+                myAvatarWrapper.classList.add('speaking');
+            } else {
+                myAvatarWrapper.classList.remove('speaking');
+            }
+        }, 100);
+    } catch (e) { console.error(e); }
+}
+
+function setupRemoteSpeakingDetection(stream) {
+    try {
+        const remoteCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const remoteAnalyser = remoteCtx.createAnalyser();
+        const remoteSource = remoteCtx.createMediaStreamSource(stream);
+        remoteSource.connect(remoteAnalyser);
+        remoteAnalyser.fftSize = 256;
+
+        const buffer = new Uint8Array(remoteAnalyser.frequencyBinCount);
+        setInterval(() => {
+            if (!activeFriend) return;
+            remoteAnalyser.getByteFrequencyData(buffer);
+            let total = buffer.reduce((a, b) => a + b, 0);
+            let avg = total / buffer.length;
+
+            const friendAvatar = document.getElementById(`avatar-friend-${activeFriend.id}`);
+            if (friendAvatar) {
+                if (avg > 25) friendAvatar.classList.add('speaking');
+                else friendAvatar.classList.remove('speaking');
+            }
+        }, 100);
+    } catch (e) { console.error(e); }
 }
 
 startCallBtn.addEventListener('click', async () => {
@@ -595,6 +838,37 @@ startCallBtn.addEventListener('click', async () => {
     await peerConnection.setLocalDescription(offer);
     socket.emit('call_user', { targetUserId: activeFriend.id, offer });
 });
+
+// P2P Screen Share
+screenShareBtn.addEventListener('click', async () => {
+    if (!peerConnection) return;
+    try {
+        if (!screenStream) {
+            screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+            const screenTrack = screenStream.getVideoTracks()[0];
+
+            peerConnection.addTrack(screenTrack, screenStream);
+            screenShareBtn.innerText = 'Stop Sharing';
+
+            // Renegotiate with peer
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            socket.emit('renegotiate_offer', { targetUserId: activeFriend.id, offer });
+
+            screenTrack.onended = () => { stopScreenShare(); };
+        } else {
+            stopScreenShare();
+        }
+    } catch (err) { console.error(err); }
+});
+
+function stopScreenShare() {
+    if (screenStream) {
+        screenStream.getTracks().forEach(t => t.stop());
+        screenStream = null;
+        screenShareBtn.innerText = 'Share Screen';
+    }
+}
 
 muteMicBtn.addEventListener('click', () => {
     if (localStream) {
@@ -612,6 +886,7 @@ endCallBtn.addEventListener('click', () => {
 });
 
 function endCallCleanly() {
+    stopScreenShare();
     if (localStream) {
         localStream.getTracks().forEach(track => track.stop());
         localStream = null;
@@ -620,6 +895,11 @@ function endCallCleanly() {
         peerConnection.close();
         peerConnection = null;
     }
+    if (speakingInterval) clearInterval(speakingInterval);
+    if (audioContext) audioContext.close();
+
+    remoteVideo.srcObject = null;
+    remoteVideo.style.display = 'none';
     activeCallPanel.style.display = 'none';
 }
 
@@ -638,9 +918,7 @@ trackTabBtn.addEventListener('click', async () => {
 
         startActivityTimer(tabTitle);
         socket.emit('update_tab_status', { tabName: tabTitle });
-    } catch (err) {
-        console.log('Tab selection cancelled.');
-    }
+    } catch (err) { console.log('Tab cancelled'); }
 });
 
 clearTabBtn.addEventListener('click', () => {
