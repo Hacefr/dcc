@@ -108,7 +108,7 @@
             </div>
         </nav>
 
-        <!-- Sidebar (Friends list or Channels) -->
+        <!-- Sidebar -->
         <aside id="sidebar">
             <div id="sidebar-header">
                 <span id="sidebar-header-title">Direct Messages</span>
@@ -144,7 +144,7 @@
                 <ul id="vc-occupants-list" class="vc-occupants-tree"></ul>
             </div>
 
-            <!-- Bottom Voice Connected Dock (when in Lounge) -->
+            <!-- Bottom Voice Connected Dock (when connected to Lounge) -->
             <div id="vc-connected-dock" style="display: none;">
                 <div class="vc-dock-status">
                     <span class="status-indicator online" style="position: static; display: inline-block;"></span>
@@ -156,7 +156,8 @@
                 <div class="vc-dock-actions">
                     <button id="dock-screen-btn" class="btn-dock">Screen</button>
                     <button id="dock-mute-btn" class="btn-dock">Mute</button>
-                    <button id="dock-disconnect-btn" class="btn-dock-red">Disconnect</button>
+                    <button id="dock-deafen-btn" class="btn-dock">Deafen</button>
+                    <button id="dock-disconnect-btn" class="btn-dock-red">Leave</button>
                 </div>
             </div>
 
@@ -174,16 +175,14 @@
                     </div>
                 </div>
 
-                <!-- Tab Tracking Controls -->
                 <div class="activity-controls">
                     <button id="track-tab-btn">Track Tab</button>
                     <button id="clear-tab-btn">Clear</button>
                 </div>
 
-                <!-- Profile Management (Reset PFP + Log Out) -->
                 <div class="profile-actions">
                     <button id="reset-pfp-btn" title="Reset avatar across all devices">Reset PFP</button>
-                    <button id="logout-btn" class="btn-logout" title="Log out of this session">Log Out</button>
+                    <button id="logout-btn" class="btn-logout" title="Log out">Log Out</button>
                 </div>
             </div>
         </aside>
@@ -207,22 +206,23 @@
                     <div class="call-controls">
                         <button id="screen-share-btn" class="btn-call-screen">Share Screen</button>
                         <button id="mute-mic-btn" class="btn-call-mute">Mute</button>
+                        <button id="deafen-call-btn" class="btn-call-mute">Deafen</button>
                         <button id="end-call-btn" class="btn-call-end">Disconnect</button>
                     </div>
                 </div>
-                <video id="remote-video" autoplay playsinline style="display: none;"></video>
+                <video id="remote-video" autoplay playsinline title="Double-click for fullscreen" style="display: none;"></video>
                 <audio id="remote-audio" autoplay></audio>
             </div>
 
-            <!-- Server VC Stage View -->
+            <!-- Server VC Stage View (Server Lounge) -->
             <div id="vc-stage-area" style="display: none;">
                 <div id="vc-screen-container" style="display: none;">
-                    <video id="vc-screen-video" autoplay playsinline></video>
+                    <video id="vc-screen-video" autoplay playsinline title="Double-click for fullscreen"></video>
                 </div>
                 <div id="vc-participants-grid"></div>
             </div>
 
-            <!-- Messages Log -->
+            <!-- Messages Feed -->
             <div id="messages-container"></div>
 
             <!-- Chat Bottom Input Area -->
@@ -230,7 +230,7 @@
                 <div id="emoji-picker" style="display: none;"></div>
 
                 <form id="chat-message-form">
-                    <textarea id="chat-message-input" placeholder="Message... (Shift+Enter for new line)" rows="1"></textarea>
+                    <textarea id="chat-message-input" placeholder="Message... (Shift+Enter for newline | Ctrl+V image)" rows="1"></textarea>
                     <button type="button" id="emoji-toggle-btn" class="btn-emoji" title="Emojis">☺</button>
                     <button type="submit" class="btn-send">Send</button>
                 </form>
@@ -241,7 +241,7 @@
         </main>
     </div>
 
-    <!-- Hidden audio containers for Lounge peers -->
+    <!-- Hidden audio pool for Lounge VC peers -->
     <div id="vc-audio-pool" style="display: none;"></div>
 
     <script src="app.js"></script>
