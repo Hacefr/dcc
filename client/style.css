@@ -37,6 +37,53 @@ body {
     height: 100vh;
 }
 
+/* ================= AVATAR SIZING & CIRCLE FIX ================= */
+.avatar-wrapper {
+    position: relative;
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
+    min-height: 36px;
+    flex-shrink: 0;
+}
+
+.avatar, #my-avatar-img {
+    width: 36px !important;
+    height: 36px !important;
+    max-width: 36px !important;
+    max-height: 36px !important;
+    border-radius: 50% !important;
+    object-fit: cover !important;
+    display: block;
+}
+
+.avatar-placeholder {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background-color: #4e5058;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    color: white;
+    font-size: 14px;
+}
+
+.status-indicator {
+    position: absolute;
+    bottom: -1px;
+    right: -1px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 2px solid var(--bg-sidebar);
+    z-index: 2;
+}
+
+.status-indicator.online { background-color: var(--green); }
+.status-indicator.offline { background-color: #80848e; }
+
 /* ================= SERVER RAIL ================= */
 #server-rail {
     width: 72px;
@@ -190,38 +237,6 @@ body {
     color: var(--text-header);
 }
 
-.avatar-wrapper {
-    position: relative;
-    width: 34px;
-    height: 34px;
-}
-
-.avatar-placeholder {
-    width: 34px;
-    height: 34px;
-    border-radius: 50%;
-    background-color: #4e5058;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-weight: bold;
-    color: white;
-    font-size: 14px;
-}
-
-.status-indicator {
-    position: absolute;
-    bottom: -1px;
-    right: -1px;
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    border: 2px solid var(--bg-sidebar);
-}
-
-.status-indicator.online { background-color: var(--green); }
-.status-indicator.offline { background-color: #80848e; }
-
 .friend-info {
     display: flex;
     flex-direction: column;
@@ -258,6 +273,10 @@ body {
     gap: 10px;
 }
 
+.user-text-info {
+    overflow: hidden;
+}
+
 .user-text-info span:first-child {
     display: block;
     font-size: 13px;
@@ -267,6 +286,10 @@ body {
 .user-text-info span:last-child {
     font-size: 11px;
     color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: block;
 }
 
 .activity-controls {
@@ -392,6 +415,7 @@ body {
     display: flex;
     flex-direction: column;
     user-select: text;
+    overflow: hidden;
 }
 
 .message-header {
@@ -437,6 +461,43 @@ body {
     margin-left: 8px;
 }
 
+/* Markdown formatting in messages */
+.message-body h1, .message-body h2, .message-body h3 {
+    color: var(--text-header);
+    margin: 8px 0 4px 0;
+}
+.message-body h1 { font-size: 18px; }
+.message-body h2 { font-size: 16px; }
+.message-body h3 { font-size: 14px; }
+
+.message-body code {
+    background-color: var(--bg-rail);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 12px;
+}
+
+.message-body pre {
+    background-color: var(--bg-rail);
+    padding: 10px;
+    border-radius: 6px;
+    overflow-x: auto;
+    margin: 6px 0;
+}
+
+.message-body blockquote {
+    border-left: 4px solid var(--blurple);
+    padding-left: 10px;
+    color: var(--text-muted);
+    margin: 6px 0;
+}
+
+.message-body ul, .message-body ol {
+    padding-left: 20px;
+    margin: 6px 0;
+}
+
 /* Chat Input Bar */
 #chat-input-container {
     padding: 0 16px 20px 16px;
@@ -476,7 +537,7 @@ body {
     color: var(--text-muted);
 }
 
-/* ================= MODALS (AUTH & DEBUG) ================= */
+/* ================= MODALS ================= */
 #auth-overlay, #debug-overlay {
     position: fixed;
     top: 0;
