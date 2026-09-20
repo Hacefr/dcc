@@ -55,7 +55,7 @@ const myAvatarBtn = document.getElementById('my-avatar-btn');
 const myAvatarImg = document.getElementById('my-avatar-img');
 const myAvatarText = document.getElementById('my-avatar-text');
 
-// Helper to render Avatar Bubble (Image or Placeholder letter)
+// Helper to render Avatar Bubble (strictly styled circular avatar)
 function createAvatarElement(username, avatarUrl) {
     if (avatarUrl) {
         return `<img src="${avatarUrl}" class="avatar" alt="${username}">`;
@@ -189,7 +189,6 @@ function initApp() {
 
     document.getElementById('my-username-display').innerText = currentUser.username;
 
-    // Use cached localStorage avatar if present
     const cachedAvatar = localStorage.getItem('my_local_avatar') || currentUser.avatar_url;
     updateMyAvatarDisplay(cachedAvatar);
 
@@ -207,7 +206,7 @@ avatarFileInput.addEventListener('change', (e) => {
     const file = e.target.files[0];
     if (!file) return;
 
-    // Compress & convert to Base64 (96x96 square)
+    // Resizes & compresses image to a square 96x96 base64
     const reader = new FileReader();
     reader.onload = (event) => {
         const img = new Image();
@@ -224,13 +223,13 @@ avatarFileInput.addEventListener('change', (e) => {
             ctx.drawImage(img, startX, startY, minSide, minSide, 0, 0, 96, 96);
             const base64Image = canvas.toDataURL('image/jpeg', 0.85);
 
-            // Save to localStorage
+            // Save in localStorage
             localStorage.setItem('my_local_avatar', base64Image);
             currentUser.avatar_url = base64Image;
             localStorage.setItem('user', JSON.stringify(currentUser));
             updateMyAvatarDisplay(base64Image);
 
-            // Share to server
+            // Sync with server
             try {
                 await fetch(`${SERVER_URL}/api/user/avatar`, {
                     method: 'POST',
@@ -398,6 +397,9 @@ function appendAnnouncement(item) {
         ? `<button class="delete-btn" onclick="deleteAnnouncement(${item.id})">Delete</button>` 
         : '';
 
+    // Markdown parsing for announcements
+    const formattedContent = typeof marked !== 'undefined' ? marked.parse(item.content) : item.content;
+
     msg.innerHTML = `
         <div class="avatar-wrapper">${createAvatarElement(item.username, item.avatar_url)}</div>
         <div class="message-content">
@@ -407,7 +409,7 @@ function appendAnnouncement(item) {
                 <span class="message-time">${date}</span>
                 ${deleteBtnHtml}
             </div>
-            <p class="message-body">${item.content}</p>
+            <div class="message-body">${formattedContent}</div>
         </div>
     `;
     messagesContainer.appendChild(msg);
