@@ -22,6 +22,8 @@ const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret';
 const OWNER_USERNAME = (process.env.OWNER_USERNAME || 'admin').toLowerCase();
 
 const activeSockets = new Map();
+// Track who is in the server Lounge VC: socketId -> { userId, username, avatar_url }
+const vcMembers = new Map();
 
 function formatPlaytime(totalSeconds) {
     const secondsInMinute = 60;
@@ -56,7 +58,6 @@ const authenticate = (req, res, next) => {
 
 // ================= API ROUTES =================
 
-// Register
 app.post('/api/register', async (req, res) => {
     const { username, password } = req.body;
     if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
@@ -77,7 +78,6 @@ app.post('/api/register', async (req, res) => {
     }
 });
 
-// Login
 app.post('/api/login', async (req, res) => {
     const { username, password } = req.body;
     try {
@@ -104,7 +104,6 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-// Update Avatar
 app.post('/api/user/avatar', authenticate, async (req, res) => {
     const { avatarUrl } = req.body;
     try {
@@ -116,7 +115,6 @@ app.post('/api/user/avatar', authenticate, async (req, res) => {
     }
 });
 
-// DEBUG STATS (Owner Only)
 app.get('/api/debug', authenticate, async (req, res) => {
     if (req.user.role !== 'owner') {
         return res.status(403).json({ error: 'Access denied. Owner only.' });
@@ -163,7 +161,6 @@ app.get('/api/debug', authenticate, async (req, res) => {
     }
 });
 
-// Admin: Reset Friend's Password
 app.post('/api/admin/reset-password', authenticate, async (req, res) => {
     if (req.user.role !== 'owner') return res.status(403).json({ error: 'Owner only' });
     const { targetUserId, newPassword } = req.body;
@@ -178,7 +175,6 @@ app.post('/api/admin/reset-password', authenticate, async (req, res) => {
     }
 });
 
-// Admin: Broadcast Server Alert
 app.post('/api/admin/broadcast-alert', authenticate, (req, res) => {
     if (req.user.role !== 'owner') return res.status(403).json({ error: 'Owner only' });
     const { alertMessage } = req.body;
@@ -188,7 +184,6 @@ app.post('/api/admin/broadcast-alert', authenticate, (req, res) => {
     res.json({ success: true });
 });
 
-// ANNOUNCEMENTS
 app.get('/api/announcements', authenticate, async (req, res) => {
     try {
         const result = await db.query(`
@@ -233,7 +228,6 @@ app.delete('/api/announcements/:id', authenticate, async (req, res) => {
     }
 });
 
-// GENERAL CHAT (Public server channel)
 app.get('/api/general-messages', authenticate, async (req, res) => {
     try {
         const result = await db.query(`
@@ -267,7 +261,6 @@ app.post('/api/general-messages', authenticate, async (req, res) => {
     }
 });
 
-// FRIENDS & DMs
 app.get('/api/friends', authenticate, async (req, res) => {
     try {
         const result = await db.query(`
@@ -333,6 +326,9 @@ io.on('connection', (socket) => {
             connectedAt: Date.now()
         });
         io.emit('user_status_changed', { userId: currentUserId, is_online: true });
+
+        // Send current VC occupants
+        socket.emit('vc_member_list', Array.from(vcMembers.values()));
     });
 
     socket.on('update_tab_status', async ({ tabName }) => {
@@ -376,7 +372,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // WebRTC Calling & Screen Share Signaling
+    // 1-on-1 Calls
     socket.on('call_user', ({ targetUserId, offer }) => {
         const target = activeSockets.get(parseInt(targetUserId, 10));
         if (target) {
@@ -419,7 +415,58 @@ io.on('connection', (socket) => {
         }
     });
 
+    // ================= GROUP SERVER VC (LOUNGE) =================
+    socket.on('join_server_vc', async () => {
+        if (!currentUserId) return;
+        const userRes = await db.query('SELECT id, username, avatar_url FROM users WHERE id = $1', [currentUserId]);
+        const user = userRes.rows[0];
+        if (!user) return;
+
+        const memberData = {
+            socketId: socket.id,
+            userId: user.id,
+            username: user.username,
+            avatar_url: user.avatar_url
+        };
+
+        // Tell everyone who is already in VC
+        socket.emit('current_vc_members', Array.from(vcMembers.values()));
+
+        vcMembers.set(socket.id, memberData);
+        socket.join('server_lounge');
+
+        // Broadcast to all other users that someone joined
+        socket.to('server_lounge').emit('user_joined_vc', memberData);
+        io.emit('vc_member_list', Array.from(vcMembers.values()));
+    });
+
+    socket.on('leave_server_vc', () => {
+        if (vcMembers.has(socket.id)) {
+            const member = vcMembers.get(socket.id);
+            vcMembers.delete(socket.id);
+            socket.leave('server_lounge');
+            socket.to('server_lounge').emit('user_left_vc', { socketId: socket.id, userId: member.userId });
+            io.emit('vc_member_list', Array.from(vcMembers.values()));
+        }
+    });
+
+    // Mesh WebRTC Signaling between VC peers
+    socket.on('vc_peer_signal', ({ targetSocketId, signalData }) => {
+        io.to(targetSocketId).emit('vc_peer_signal', {
+            senderSocketId: socket.id,
+            signalData
+        });
+    });
+
+    // Handle Disconnect
     socket.on('disconnect', async () => {
+        if (vcMembers.has(socket.id)) {
+            const member = vcMembers.get(socket.id);
+            vcMembers.delete(socket.id);
+            socket.to('server_lounge').emit('user_left_vc', { socketId: socket.id, userId: member.userId });
+            io.emit('vc_member_list', Array.from(vcMembers.values()));
+        }
+
         if (currentUserId && activeSockets.has(currentUserId)) {
             const session = activeSockets.get(currentUserId);
             const sessionSeconds = Math.floor((Date.now() - session.connectedAt) / 1000);
