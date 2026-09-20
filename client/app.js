@@ -1,5 +1,5 @@
 // Change this to your Render URL when deployed:
-const SERVER_URL = 'http://localhost:5000';
+const SERVER_URL = 'https://dcc-x6ev.onrender.com';
 
 let token = localStorage.getItem('token');
 let currentUser = JSON.parse(localStorage.getItem('user'));
