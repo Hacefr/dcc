@@ -177,9 +177,7 @@ body {
     display: none;
 }
 
-.rail-btn.active .pill-indicator {
-    display: block;
-}
+.rail-btn.active .pill-indicator { display: block; }
 
 /* ================= SIDEBAR ================= */
 #sidebar {
@@ -290,6 +288,70 @@ body {
 }
 .friend-activity.offline-text { color: var(--text-muted); }
 
+/* VC Occupants List in Sidebar */
+.vc-occupants-tree {
+    list-style: none;
+    padding-left: 28px;
+    margin-bottom: 8px;
+}
+.vc-occupant-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    font-size: 12px;
+    color: var(--text-normal);
+}
+.vc-occupant-item .avatar-wrapper, .vc-occupant-item .avatar, .vc-occupant-item .avatar-placeholder {
+    width: 22px !important;
+    height: 22px !important;
+    min-width: 22px !important;
+    min-height: 22px !important;
+    font-size: 10px;
+}
+
+/* Bottom VC Dock */
+#vc-connected-dock {
+    background-color: #121315;
+    border-top: 1px solid var(--border-color);
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.vc-dock-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.vc-dock-actions {
+    display: flex;
+    gap: 4px;
+}
+.btn-dock {
+    flex: 1;
+    background-color: var(--bg-hover);
+    color: white;
+    border: none;
+    padding: 6px 0;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: bold;
+    cursor: pointer;
+}
+.btn-dock:hover { background-color: var(--bg-active); }
+.btn-dock-red {
+    flex: 1;
+    background-color: var(--red);
+    color: white;
+    border: none;
+    padding: 6px 0;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: bold;
+    cursor: pointer;
+}
+
 /* Bottom User Bar */
 #current-user-panel {
     background-color: var(--bg-rail);
@@ -345,7 +407,7 @@ body {
 }
 #track-tab-btn:hover { background-color: #3b4b77; }
 
-/* ================= CHAT AREA ================= */
+/* ================= CHAT AREA & VC STAGE ================= */
 #chat-area {
     flex: 1;
     display: flex;
@@ -386,7 +448,7 @@ body {
     cursor: pointer;
 }
 
-/* WebRTC Active Call & Video */
+/* 1-on-1 Call Bar */
 #active-call-panel {
     background-color: #1a2e22;
     border-bottom: 1px solid #23a55a44;
@@ -440,6 +502,71 @@ body {
     object-fit: contain;
 }
 
+/* VC Stage View (Server Lounge) */
+#vc-stage-area {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 20px;
+    gap: 16px;
+    background-color: #1a1b1e;
+    overflow-y: auto;
+}
+
+#vc-screen-container {
+    width: 100%;
+    max-height: 480px;
+    background: black;
+    border-radius: 8px;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#vc-screen-video {
+    width: 100%;
+    height: 100%;
+    max-height: 480px;
+    object-fit: contain;
+}
+
+#vc-participants-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    justify-content: center;
+}
+
+.vc-grid-card {
+    background-color: var(--bg-sidebar);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    width: 150px;
+    height: 130px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    position: relative;
+}
+
+.vc-grid-card .avatar-wrapper, .vc-grid-card .avatar, .vc-grid-card .avatar-placeholder {
+    width: 60px !important;
+    height: 60px !important;
+    min-width: 60px !important;
+    min-height: 60px !important;
+    font-size: 24px;
+}
+
+.vc-grid-name {
+    font-size: 13px;
+    font-weight: bold;
+    color: var(--text-header);
+}
+
+/* Chat Messages Feed */
 #messages-container {
     flex: 1;
     overflow-y: auto;
