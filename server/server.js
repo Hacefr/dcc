@@ -22,7 +22,6 @@ const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret';
 const OWNER_USERNAME = (process.env.OWNER_USERNAME || 'admin').toLowerCase();
 
 const activeSockets = new Map();
-// Track who is in the server Lounge VC: socketId -> { userId, username, avatar_url }
 const vcMembers = new Map();
 
 function formatPlaytime(totalSeconds) {
@@ -112,6 +111,17 @@ app.post('/api/user/avatar', authenticate, async (req, res) => {
         res.json({ success: true, avatarUrl });
     } catch (err) {
         res.status(500).json({ error: 'Failed to update avatar' });
+    }
+});
+
+// Reset Profile Picture across all devices
+app.post('/api/user/avatar/reset', authenticate, async (req, res) => {
+    try {
+        await db.query('UPDATE users SET avatar_url = NULL WHERE id = $1', [req.user.id]);
+        io.emit('friend_avatar_updated', { userId: req.user.id, avatarUrl: null });
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to reset avatar' });
     }
 });
 
@@ -326,8 +336,6 @@ io.on('connection', (socket) => {
             connectedAt: Date.now()
         });
         io.emit('user_status_changed', { userId: currentUserId, is_online: true });
-
-        // Send current VC occupants
         socket.emit('vc_member_list', Array.from(vcMembers.values()));
     });
 
@@ -415,7 +423,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // ================= GROUP SERVER VC (LOUNGE) =================
+    // GROUP SERVER VC (LOUNGE)
     socket.on('join_server_vc', async () => {
         if (!currentUserId) return;
         const userRes = await db.query('SELECT id, username, avatar_url FROM users WHERE id = $1', [currentUserId]);
@@ -429,13 +437,11 @@ io.on('connection', (socket) => {
             avatar_url: user.avatar_url
         };
 
-        // Tell everyone who is already in VC
         socket.emit('current_vc_members', Array.from(vcMembers.values()));
 
         vcMembers.set(socket.id, memberData);
         socket.join('server_lounge');
 
-        // Broadcast to all other users that someone joined
         socket.to('server_lounge').emit('user_joined_vc', memberData);
         io.emit('vc_member_list', Array.from(vcMembers.values()));
     });
@@ -450,7 +456,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Mesh WebRTC Signaling between VC peers
     socket.on('vc_peer_signal', ({ targetSocketId, signalData }) => {
         io.to(targetSocketId).emit('vc_peer_signal', {
             senderSocketId: socket.id,
@@ -458,7 +463,6 @@ io.on('connection', (socket) => {
         });
     });
 
-    // Handle Disconnect
     socket.on('disconnect', async () => {
         if (vcMembers.has(socket.id)) {
             const member = vcMembers.get(socket.id);
