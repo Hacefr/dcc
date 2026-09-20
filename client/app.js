@@ -1,4 +1,3 @@
-// Automatically connects to whatever domain the app is running on
 const SERVER_URL = window.location.origin;
 
 let token = localStorage.getItem('token');
@@ -6,15 +5,14 @@ let currentUser = JSON.parse(localStorage.getItem('user'));
 let socket = null;
 
 // App State
-let activeView = 'dms'; // 'dms' or 'server'
-let activeFriend = null; // Currently opened DM friend object
+let activeView = 'dms';
+let activeFriend = null;
 let friendsList = [];
 let localStream = null;
 let peerConnection = null;
 let tabCaptureStream = null;
 let tabTimerInterval = null;
 
-// STUN Configuration for WebRTC
 const rtcConfig = {
     iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
 };
@@ -50,6 +48,20 @@ const channelLockedBanner = document.getElementById('channel-locked-banner');
 
 const debugOverlay = document.getElementById('debug-overlay');
 const closeDebugBtn = document.getElementById('close-debug-btn');
+
+// Avatar Upload Elements
+const avatarFileInput = document.getElementById('avatar-file-input');
+const myAvatarBtn = document.getElementById('my-avatar-btn');
+const myAvatarImg = document.getElementById('my-avatar-img');
+const myAvatarText = document.getElementById('my-avatar-text');
+
+// Helper to render Avatar Bubble (Image or Placeholder letter)
+function createAvatarElement(username, avatarUrl) {
+    if (avatarUrl) {
+        return `<img src="${avatarUrl}" class="avatar" alt="${username}">`;
+    }
+    return `<div class="avatar-placeholder">${username[0].toUpperCase()}</div>`;
+}
 
 // ================= 1. ROUTING & DEBUG VIEW =================
 function handleRoute() {
@@ -154,6 +166,18 @@ function saveAuth(newToken, newUser) {
     initApp();
 }
 
+function updateMyAvatarDisplay(url) {
+    if (url) {
+        myAvatarImg.src = url;
+        myAvatarImg.style.display = 'block';
+        myAvatarText.style.display = 'none';
+    } else {
+        myAvatarImg.style.display = 'none';
+        myAvatarText.style.display = 'flex';
+        myAvatarText.innerText = currentUser.username[0].toUpperCase();
+    }
+}
+
 function initApp() {
     if (!token || !currentUser) {
         authOverlay.style.display = 'flex';
@@ -164,14 +188,68 @@ function initApp() {
     appContainer.style.display = 'flex';
 
     document.getElementById('my-username-display').innerText = currentUser.username;
-    document.getElementById('my-avatar-text').innerText = currentUser.username[0].toUpperCase();
+
+    // Use cached localStorage avatar if present
+    const cachedAvatar = localStorage.getItem('my_local_avatar') || currentUser.avatar_url;
+    updateMyAvatarDisplay(cachedAvatar);
 
     initSocket();
     loadFriends();
     handleRoute();
 }
 
-// ================= 3. SOCKET & REALTIME =================
+// ================= 3. PROFILE PICTURE UPLOAD =================
+myAvatarBtn.addEventListener('click', () => {
+    avatarFileInput.click();
+});
+
+avatarFileInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    // Compress & convert to Base64 (96x96 square)
+    const reader = new FileReader();
+    reader.onload = (event) => {
+        const img = new Image();
+        img.onload = async () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = 96;
+            canvas.height = 96;
+            const ctx = canvas.getContext('2d');
+
+            const minSide = Math.min(img.width, img.height);
+            const startX = (img.width - minSide) / 2;
+            const startY = (img.height - minSide) / 2;
+
+            ctx.drawImage(img, startX, startY, minSide, minSide, 0, 0, 96, 96);
+            const base64Image = canvas.toDataURL('image/jpeg', 0.85);
+
+            // Save to localStorage
+            localStorage.setItem('my_local_avatar', base64Image);
+            currentUser.avatar_url = base64Image;
+            localStorage.setItem('user', JSON.stringify(currentUser));
+            updateMyAvatarDisplay(base64Image);
+
+            // Share to server
+            try {
+                await fetch(`${SERVER_URL}/api/user/avatar`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({ avatarUrl: base64Image })
+                });
+            } catch (err) {
+                console.error('Failed to sync avatar with server', err);
+            }
+        };
+        img.src = event.target.result;
+    };
+    reader.readAsDataURL(file);
+});
+
+// ================= 4. SOCKET & REALTIME =================
 function initSocket() {
     socket = io(SERVER_URL);
 
@@ -187,6 +265,14 @@ function initSocket() {
         }
     });
 
+    socket.on('friend_avatar_updated', ({ userId, avatarUrl }) => {
+        const friend = friendsList.find(f => f.id === userId);
+        if (friend) {
+            friend.avatar_url = avatarUrl;
+            renderFriendsList();
+        }
+    });
+
     socket.on('friend_tab_updated', ({ userId, current_tab }) => {
         const friend = friendsList.find(f => f.id === userId);
         if (friend) {
@@ -198,7 +284,8 @@ function initSocket() {
     socket.on('receive_dm', (message) => {
         if (activeView === 'dms' && activeFriend && 
            (message.sender_id === activeFriend.id || message.sender_id === currentUser.id)) {
-            appendMessage(message.sender_id === currentUser.id ? currentUser.username : activeFriend.username, message.content, message.created_at);
+            const author = message.sender_id === currentUser.id ? currentUser.username : activeFriend.username;
+            appendMessage(author, message.content, message.created_at, message.avatar_url);
         }
     });
 
@@ -213,7 +300,6 @@ function initSocket() {
         if (el) el.remove();
     });
 
-    // WebRTC Signaling Events
     socket.on('incoming_call', async ({ fromUserId, offer }) => {
         const friend = friendsList.find(f => f.id === fromUserId);
         const callerName = friend ? friend.username : 'Friend';
@@ -245,7 +331,7 @@ function initSocket() {
     });
 }
 
-// ================= 4. NAVIGATION (DMs vs SERVER) =================
+// ================= 5. NAVIGATION =================
 navDmsBtn.addEventListener('click', () => {
     activeView = 'dms';
     navDmsBtn.classList.add('active');
@@ -276,7 +362,7 @@ navServerBtn.addEventListener('click', () => {
     openAnnouncements();
 });
 
-// ================= 5. ANNOUNCEMENTS =================
+// ================= 6. ANNOUNCEMENTS =================
 async function openAnnouncements() {
     chatHeaderPrefix.innerText = '#';
     chatHeaderTitle.innerText = 'announcements';
@@ -313,7 +399,7 @@ function appendAnnouncement(item) {
         : '';
 
     msg.innerHTML = `
-        <div class="avatar-placeholder">${item.username[0].toUpperCase()}</div>
+        <div class="avatar-wrapper">${createAvatarElement(item.username, item.avatar_url)}</div>
         <div class="message-content">
             <div class="message-header">
                 <span class="message-author">${item.username}</span>
@@ -335,7 +421,7 @@ window.deleteAnnouncement = async function(id) {
     });
 };
 
-// ================= 6. FRIENDS & DMs =================
+// ================= 7. FRIENDS & DMs =================
 async function loadFriends() {
     try {
         const res = await fetch(`${SERVER_URL}/api/friends`, {
@@ -363,7 +449,7 @@ function renderFriendsList() {
 
         li.innerHTML = `
             <div class="avatar-wrapper">
-                <div class="avatar-placeholder">${friend.username[0].toUpperCase()}</div>
+                ${createAvatarElement(friend.username, friend.avatar_url)}
                 <span class="status-indicator ${friend.is_online ? 'online' : 'offline'}"></span>
             </div>
             <div class="friend-info">
@@ -418,7 +504,8 @@ async function openDM(friend) {
         });
         const messages = await res.json();
         messages.forEach(m => {
-            appendMessage(m.sender_id === currentUser.id ? currentUser.username : friend.username, m.content, m.created_at);
+            const author = m.sender_id === currentUser.id ? currentUser.username : friend.username;
+            appendMessage(author, m.content, m.created_at, m.avatar_url);
         });
     } catch (err) {
         console.error(err);
@@ -446,13 +533,13 @@ chatForm.addEventListener('submit', async (e) => {
     chatInput.value = '';
 });
 
-function appendMessage(author, text, createdAt) {
+function appendMessage(author, text, createdAt, avatarUrl) {
     const msg = document.createElement('div');
     msg.className = 'message';
     const date = new Date(createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
     msg.innerHTML = `
-        <div class="avatar-placeholder">${author[0].toUpperCase()}</div>
+        <div class="avatar-wrapper">${createAvatarElement(author, avatarUrl)}</div>
         <div class="message-content">
             <div class="message-header">
                 <span class="message-author">${author}</span>
@@ -465,7 +552,7 @@ function appendMessage(author, text, createdAt) {
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
 
-// ================= 7. WEBRTC AUDIO CALLING =================
+// ================= 8. WEBRTC AUDIO CALLING =================
 async function setupPeerConnection() {
     localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
     peerConnection = new RTCPeerConnection(rtcConfig);
@@ -521,7 +608,7 @@ function endCallCleanly() {
     activeCallPanel.style.display = 'none';
 }
 
-// ================= 8. TAB TRACKER & TIMER =================
+// ================= 9. TAB TRACKER & TIMER =================
 const trackTabBtn = document.getElementById('track-tab-btn');
 const clearTabBtn = document.getElementById('clear-tab-btn');
 const myStatusText = document.getElementById('my-status-text');
