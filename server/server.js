@@ -15,7 +15,7 @@ const io = new Server(server, {
 });
 
 app.use(cors());
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '15mb' }));
 
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret';
@@ -55,7 +55,7 @@ const authenticate = (req, res, next) => {
     });
 };
 
-// ================= API ROUTES =================
+// ================= AUTH ROUTES =================
 
 app.post('/api/register', async (req, res) => {
     const { username, password } = req.body;
@@ -103,6 +103,8 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
+// ================= AVATAR ROUTES =================
+
 app.post('/api/user/avatar', authenticate, async (req, res) => {
     const { avatarUrl } = req.body;
     try {
@@ -114,7 +116,6 @@ app.post('/api/user/avatar', authenticate, async (req, res) => {
     }
 });
 
-// Reset Profile Picture across all devices
 app.post('/api/user/avatar/reset', authenticate, async (req, res) => {
     try {
         await db.query('UPDATE users SET avatar_url = NULL WHERE id = $1', [req.user.id]);
@@ -124,6 +125,8 @@ app.post('/api/user/avatar/reset', authenticate, async (req, res) => {
         res.status(500).json({ error: 'Failed to reset avatar' });
     }
 });
+
+// ================= OWNER DEBUG & ADMIN ROUTES =================
 
 app.get('/api/debug', authenticate, async (req, res) => {
     if (req.user.role !== 'owner') {
@@ -194,6 +197,8 @@ app.post('/api/admin/broadcast-alert', authenticate, (req, res) => {
     res.json({ success: true });
 });
 
+// ================= ANNOUNCEMENTS =================
+
 app.get('/api/announcements', authenticate, async (req, res) => {
     try {
         const result = await db.query(`
@@ -238,6 +243,8 @@ app.delete('/api/announcements/:id', authenticate, async (req, res) => {
     }
 });
 
+// ================= GENERAL CHAT =================
+
 app.get('/api/general-messages', authenticate, async (req, res) => {
     try {
         const result = await db.query(`
@@ -270,6 +277,25 @@ app.post('/api/general-messages', authenticate, async (req, res) => {
         res.status(500).json({ error: 'Failed to post to general' });
     }
 });
+
+app.delete('/api/general-messages/:id', authenticate, async (req, res) => {
+    try {
+        const check = await db.query('SELECT user_id FROM general_messages WHERE id = $1', [req.params.id]);
+        if (check.rows.length === 0) return res.status(404).json({ error: 'Message not found' });
+
+        if (check.rows[0].user_id !== req.user.id && req.user.role !== 'owner') {
+            return res.status(403).json({ error: 'Cannot delete other user messages' });
+        }
+
+        await db.query('DELETE FROM general_messages WHERE id = $1', [req.params.id]);
+        io.emit('deleted_general_message', req.params.id);
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to delete message' });
+    }
+});
+
+// ================= FRIENDS & DMS =================
 
 app.get('/api/friends', authenticate, async (req, res) => {
     try {
@@ -325,7 +351,31 @@ app.get('/api/messages/:friendId', authenticate, async (req, res) => {
     }
 });
 
+app.delete('/api/messages/:id', authenticate, async (req, res) => {
+    try {
+        const check = await db.query('SELECT sender_id, receiver_id FROM direct_messages WHERE id = $1', [req.params.id]);
+        if (check.rows.length === 0) return res.status(404).json({ error: 'Message not found' });
+
+        const msg = check.rows[0];
+        if (msg.sender_id !== req.user.id && req.user.role !== 'owner') {
+            return res.status(403).json({ error: 'Cannot delete this message' });
+        }
+
+        await db.query('DELETE FROM direct_messages WHERE id = $1', [req.params.id]);
+
+        const senderSocket = activeSockets.get(msg.sender_id);
+        const receiverSocket = activeSockets.get(msg.receiver_id);
+        if (senderSocket) io.to(senderSocket.socketId).emit('deleted_dm', req.params.id);
+        if (receiverSocket) io.to(receiverSocket.socketId).emit('deleted_dm', req.params.id);
+
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to delete message' });
+    }
+});
+
 // ================= SOCKET.IO REALTIME =================
+
 io.on('connection', (socket) => {
     let currentUserId = null;
 
@@ -423,7 +473,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // GROUP SERVER VC (LOUNGE)
+    // Group VC (Lounge)
     socket.on('join_server_vc', async () => {
         if (!currentUserId) return;
         const userRes = await db.query('SELECT id, username, avatar_url FROM users WHERE id = $1', [currentUserId]);
