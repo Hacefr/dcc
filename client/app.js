@@ -1,5 +1,13 @@
 const SERVER_URL = window.location.origin;
 
+// Enable GitHub-flavored Markdown and automatic newlines
+if (typeof marked !== 'undefined') {
+    marked.setOptions({
+        breaks: true,
+        gfm: true
+    });
+}
+
 let token = localStorage.getItem('token');
 let currentUser = JSON.parse(localStorage.getItem('user'));
 let socket = null;
@@ -206,7 +214,6 @@ avatarFileInput.addEventListener('change', (e) => {
     const file = e.target.files[0];
     if (!file) return;
 
-    // Resizes & compresses image to a square 96x96 base64
     const reader = new FileReader();
     reader.onload = (event) => {
         const img = new Image();
@@ -223,13 +230,11 @@ avatarFileInput.addEventListener('change', (e) => {
             ctx.drawImage(img, startX, startY, minSide, minSide, 0, 0, 96, 96);
             const base64Image = canvas.toDataURL('image/jpeg', 0.85);
 
-            // Save in localStorage
             localStorage.setItem('my_local_avatar', base64Image);
             currentUser.avatar_url = base64Image;
             localStorage.setItem('user', JSON.stringify(currentUser));
             updateMyAvatarDisplay(base64Image);
 
-            // Sync with server
             try {
                 await fetch(`${SERVER_URL}/api/user/avatar`, {
                     method: 'POST',
@@ -370,7 +375,7 @@ async function openAnnouncements() {
     if (currentUser.role === 'owner') {
         channelLockedBanner.style.display = 'none';
         chatForm.style.display = 'flex';
-        chatInput.placeholder = 'Post announcement as Owner...';
+        chatInput.placeholder = 'Post announcement as Owner... (Shift+Enter for newline)';
     } else {
         chatForm.style.display = 'none';
         channelLockedBanner.style.display = 'block';
@@ -397,7 +402,6 @@ function appendAnnouncement(item) {
         ? `<button class="delete-btn" onclick="deleteAnnouncement(${item.id})">Delete</button>` 
         : '';
 
-    // Markdown parsing for announcements
     const formattedContent = typeof marked !== 'undefined' ? marked.parse(item.content) : item.content;
 
     msg.innerHTML = `
@@ -497,7 +501,7 @@ async function openDM(friend) {
     chatHeaderPrefix.innerText = '@';
     chatHeaderTitle.innerText = friend.username;
     callHeaderAction.style.display = 'block';
-    chatInput.placeholder = `Message @${friend.username}...`;
+    chatInput.placeholder = `Message @${friend.username}... (Shift+Enter for newline)`;
     messagesContainer.innerHTML = '';
 
     try {
@@ -513,6 +517,14 @@ async function openDM(friend) {
         console.error(err);
     }
 }
+
+// Handle Enter to send, Shift+Enter for new line
+chatInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        chatForm.dispatchEvent(new Event('submit'));
+    }
+});
 
 chatForm.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -533,6 +545,7 @@ chatForm.addEventListener('submit', async (e) => {
     }
 
     chatInput.value = '';
+    chatInput.style.height = 'auto';
 });
 
 function appendMessage(author, text, createdAt, avatarUrl) {
