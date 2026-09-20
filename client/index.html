@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Private Chat</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Socket.io Client CDN -->
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+</head>
+<body>
+
+    <!-- ================= 1. AUTH MODAL ================= -->
+    <div id="auth-overlay">
+        <div id="auth-box">
+            <form id="login-form">
+                <h2>Welcome Back</h2>
+                <div class="form-group">
+                    <label for="login-username">Username</label>
+                    <input type="text" id="login-username" required autocomplete="off">
+                </div>
+                <div class="form-group">
+                    <label for="login-password">Password</label>
+                    <input type="password" id="login-password" required autocomplete="off">
+                </div>
+                <button type="submit" class="btn-primary">Log In</button>
+                <p class="auth-switch">Need an account? <span id="to-signup">Register</span></p>
+                <div id="auth-error" class="error-text"></div>
+            </form>
+
+            <form id="signup-form" style="display: none;">
+                <h2>Create an Account</h2>
+                <div class="form-group">
+                    <label for="signup-username">Username</label>
+                    <input type="text" id="signup-username" required autocomplete="off">
+                </div>
+                <div class="form-group">
+                    <label for="signup-password">Password</label>
+                    <input type="password" id="signup-password" required autocomplete="off">
+                </div>
+                <button type="submit" class="btn-primary">Register</button>
+                <p class="auth-switch">Already have an account? <span id="to-login">Log In</span></p>
+                <div id="signup-error" class="error-text"></div>
+            </form>
+        </div>
+    </div>
+
+    <!-- ================= 2. DEBUG MODAL (/#debug) ================= -->
+    <div id="debug-overlay" style="display: none;">
+        <div id="debug-window">
+            <div id="debug-header">
+                <div>
+                    <h3>SYSTEM DEBUG — PLAYER ACCOUNT STATS</h3>
+                    <span id="debug-sys-date" class="debug-date-tag"></span>
+                </div>
+                <button id="close-debug-btn" class="debug-close-btn">Close</button>
+            </div>
+            <div class="debug-content">
+                <table class="debug-table">
+                    <thead>
+                        <tr>
+                            <th>Account</th>
+                            <th>Role</th>
+                            <th>Status</th>
+                            <th>Playtime (D/M/Y)</th>
+                            <th>Current Tab / Activity</th>
+                        </tr>
+                    </thead>
+                    <tbody id="debug-players-body">
+                        <!-- Populated by JS -->
+                    </tbody>
+                </table>
+            </div>
+            <div id="debug-footer">
+                <span id="debug-total-accounts">Total Accounts: 0</span>
+                <span id="debug-online-now">Online Right Now: 0</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= 3. MAIN APP ================= -->
+    <div id="app-container" style="display: none;">
+
+        <!-- Server Rail (Far Left) -->
+        <nav id="server-rail">
+            <div id="nav-dms-btn" class="rail-btn active" title="Direct Messages">
+                <span class="rail-text">DMs</span>
+            </div>
+            <div class="rail-separator"></div>
+            <div id="nav-server-btn" class="rail-btn" title="The Server">
+                <div class="pill-indicator"></div>
+                <!-- Make sure to place an icon.png inside client/ folder -->
+                <img src="icon.png" alt="HQ" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
+                <span class="rail-text" style="display: none;">HQ</span>
+            </div>
+        </nav>
+
+        <!-- Sidebar (Friends list or Channels) -->
+        <aside id="sidebar">
+            <div id="sidebar-header">
+                <span id="sidebar-header-title">Direct Messages</span>
+            </div>
+
+            <!-- DM View Section -->
+            <div id="dms-sidebar-section">
+                <form id="add-friend-form">
+                    <input type="text" id="add-friend-input" placeholder="Add friend..." autocomplete="off">
+                    <button type="submit" class="btn-small">+</button>
+                </form>
+                <div class="list-section-title">Direct Messages</div>
+                <ul id="friends-list"></ul>
+            </div>
+
+            <!-- Server View Section (Only #announcements) -->
+            <div id="server-sidebar-section" style="display: none;">
+                <div class="channel-item active">
+                    <span class="hash-tag">#</span>
+                    <span>announcements</span>
+                </div>
+            </div>
+
+            <!-- Bottom User Profile Card -->
+            <div id="current-user-panel">
+                <div class="user-details">
+                    <div class="avatar-wrapper">
+                        <div class="avatar-placeholder" id="my-avatar-text">U</div>
+                        <span class="status-indicator online"></span>
+                    </div>
+                    <div class="user-text-info">
+                        <span id="my-username-display">Username</span>
+                        <span id="my-status-text">Tracking: Nothing</span>
+                    </div>
+                </div>
+                <div class="activity-controls">
+                    <button id="track-tab-btn">Track Tab</button>
+                    <button id="clear-tab-btn">Clear</button>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Chat Area -->
+        <main id="chat-area">
+            
+            <!-- Top Header -->
+            <header id="chat-header">
+                <div id="chat-header-info">
+                    <span id="chat-header-prefix" class="hash-tag">@</span>
+                    <span id="chat-header-title">Select a chat</span>
+                </div>
+                <div id="call-header-action" style="display: none;">
+                    <button id="start-call-btn" class="call-action-btn">Start Voice Call</button>
+                </div>
+            </header>
+
+            <!-- Active Voice Call Bar -->
+            <div id="active-call-panel" style="display: none;">
+                <span id="call-status-text" class="call-status-text">Connected</span>
+                <div class="call-controls">
+                    <button id="mute-mic-btn" class="btn-call-mute">Mute</button>
+                    <button id="end-call-btn" class="btn-call-end">Disconnect</button>
+                </div>
+                <audio id="remote-audio" autoplay></audio>
+            </div>
+
+            <!-- Messages Log -->
+            <div id="messages-container"></div>
+
+            <!-- Chat Bottom Input Area -->
+            <footer id="chat-input-container">
+                <form id="chat-message-form">
+                    <input type="text" id="chat-message-input" placeholder="Message..." autocomplete="off">
+                    <button type="submit" class="btn-send">Send</button>
+                </form>
+                <div id="channel-locked-banner" class="read-only-banner" style="display: none;">
+                    You do not have permission to send messages in this channel.
+                </div>
+            </footer>
+
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
