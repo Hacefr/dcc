@@ -124,7 +124,7 @@
                 <ul id="friends-list"></ul>
             </div>
 
-            <!-- Server View Section (Text Channels + Lounge VC) -->
+            <!-- Server View Section -->
             <div id="server-sidebar-section" style="display: none;">
                 <div class="list-section-title">Text Channels</div>
                 <div class="channel-item active" id="channel-announcements-btn">
@@ -141,11 +141,10 @@
                     <span class="hash-tag">🔊</span>
                     <span>Lounge</span>
                 </div>
-                <!-- Members sitting in VC -->
                 <ul id="vc-occupants-list" class="vc-occupants-tree"></ul>
             </div>
 
-            <!-- Bottom Voice Connected Dock (shown when in Lounge VC) -->
+            <!-- Bottom Voice Connected Dock (when in Lounge) -->
             <div id="vc-connected-dock" style="display: none;">
                 <div class="vc-dock-status">
                     <span class="status-indicator online" style="position: static; display: inline-block;"></span>
@@ -174,14 +173,22 @@
                         <span id="my-status-text">Tracking: Nothing</span>
                     </div>
                 </div>
+
+                <!-- Tab Tracking Controls -->
                 <div class="activity-controls">
                     <button id="track-tab-btn">Track Tab</button>
                     <button id="clear-tab-btn">Clear</button>
                 </div>
+
+                <!-- Profile Management (Reset PFP + Log Out) -->
+                <div class="profile-actions">
+                    <button id="reset-pfp-btn" title="Reset avatar across all devices">Reset PFP</button>
+                    <button id="logout-btn" class="btn-logout" title="Log out of this session">Log Out</button>
+                </div>
             </div>
         </aside>
 
-        <!-- Main Chat & Video Area -->
+        <!-- Main Chat Area -->
         <main id="chat-area">
             <header id="chat-header">
                 <div id="chat-header-info">
@@ -207,7 +214,7 @@
                 <audio id="remote-audio" autoplay></audio>
             </div>
 
-            <!-- Server VC Stage View (Shown when viewing Lounge) -->
+            <!-- Server VC Stage View -->
             <div id="vc-stage-area" style="display: none;">
                 <div id="vc-screen-container" style="display: none;">
                     <video id="vc-screen-video" autoplay playsinline></video>
