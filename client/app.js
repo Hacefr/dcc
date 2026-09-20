@@ -19,7 +19,7 @@ let localStream = null;
 let screenStream = null;
 let peerConnection = null;
 
-// Group VC (Lounge) Mesh WebRTC State
+// Group VC (Lounge) State
 let inLoungeVC = false;
 let vcLocalAudioStream = null;
 let vcLocalScreenStream = null;
@@ -107,6 +107,8 @@ const avatarFileInput = document.getElementById('avatar-file-input');
 const myAvatarBtn = document.getElementById('my-avatar-btn');
 const myAvatarImg = document.getElementById('my-avatar-img');
 const myAvatarText = document.getElementById('my-avatar-text');
+const resetPfpBtn = document.getElementById('reset-pfp-btn');
+const logoutBtn = document.getElementById('logout-btn');
 
 const emojiPicker = document.getElementById('emoji-picker');
 const emojiToggleBtn = document.getElementById('emoji-toggle-btn');
@@ -154,7 +156,7 @@ document.addEventListener('click', (ev) => {
     }
 });
 
-// ================= 1. ROUTING & DEBUG VIEW =================
+// ================= 1. ROUTING & DEBUG VIEW (OWNER ONLY) =================
 function handleRoute() {
     if (window.location.hash === '#debug') {
         if (!currentUser || currentUser.role !== 'owner') {
@@ -240,7 +242,7 @@ sendBroadcastBtn.onclick = async () => {
     alert('Alert broadcasted to all online users.');
 };
 
-// ================= 2. AUTHENTICATION =================
+// ================= 2. AUTHENTICATION & LOGOUT =================
 document.getElementById('to-signup').addEventListener('click', () => {
     loginForm.style.display = 'none';
     signupForm.style.display = 'block';
@@ -300,6 +302,31 @@ function saveAuth(newToken, newUser) {
     initApp();
 }
 
+logoutBtn.addEventListener('click', () => {
+    if (confirm('Are you sure you want to log out?')) {
+        leaveLoungeVC();
+        endCallCleanly();
+
+        if (socket) {
+            socket.disconnect();
+            socket = null;
+        }
+
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        localStorage.removeItem('my_local_avatar');
+        token = null;
+        currentUser = null;
+
+        appContainer.style.display = 'none';
+        authOverlay.style.display = 'flex';
+        loginForm.style.display = 'block';
+        signupForm.style.display = 'none';
+        document.getElementById('login-username').value = '';
+        document.getElementById('login-password').value = '';
+    }
+});
+
 function updateMyAvatarDisplay(url) {
     if (url) {
         myAvatarImg.src = url;
@@ -308,7 +335,7 @@ function updateMyAvatarDisplay(url) {
     } else {
         myAvatarImg.style.display = 'none';
         myAvatarText.style.display = 'flex';
-        myAvatarText.innerText = currentUser.username[0].toUpperCase();
+        myAvatarText.innerText = currentUser ? currentUser.username[0].toUpperCase() : 'U';
     }
 }
 
@@ -323,8 +350,8 @@ function initApp() {
 
     document.getElementById('my-username-display').innerText = currentUser.username;
 
-    const cachedAvatar = localStorage.getItem('my_local_avatar') || currentUser.avatar_url;
-    updateMyAvatarDisplay(cachedAvatar);
+    // Database serves as source of truth for avatar
+    updateMyAvatarDisplay(currentUser.avatar_url);
 
     requestNotificationPermission();
     initSocket();
@@ -332,7 +359,7 @@ function initApp() {
     handleRoute();
 }
 
-// ================= 3. PROFILE PICTURE UPLOAD =================
+// ================= 3. PROFILE PICTURE & RESET PFP =================
 myAvatarBtn.addEventListener('click', () => { avatarFileInput.click(); });
 
 avatarFileInput.addEventListener('change', (e) => {
@@ -355,7 +382,6 @@ avatarFileInput.addEventListener('change', (e) => {
             ctx.drawImage(img, startX, startY, minSide, minSide, 0, 0, 96, 96);
             const base64Image = canvas.toDataURL('image/jpeg', 0.85);
 
-            localStorage.setItem('my_local_avatar', base64Image);
             currentUser.avatar_url = base64Image;
             localStorage.setItem('user', JSON.stringify(currentUser));
             updateMyAvatarDisplay(base64Image);
@@ -376,6 +402,24 @@ avatarFileInput.addEventListener('change', (e) => {
         img.src = event.target.result;
     };
     reader.readAsDataURL(file);
+});
+
+resetPfpBtn.addEventListener('click', async () => {
+    if (!confirm('Reset your profile picture across all devices?')) return;
+    try {
+        await fetch(`${SERVER_URL}/api/user/avatar/reset`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+
+        currentUser.avatar_url = null;
+        localStorage.setItem('user', JSON.stringify(currentUser));
+        localStorage.removeItem('my_local_avatar');
+        updateMyAvatarDisplay(null);
+        alert('Profile picture has been reset.');
+    } catch (err) {
+        alert('Failed to reset profile picture.');
+    }
 });
 
 // ================= 4. SOCKET & REALTIME =================
@@ -400,6 +444,11 @@ function initSocket() {
     });
 
     socket.on('friend_avatar_updated', ({ userId, avatarUrl }) => {
+        if (currentUser && currentUser.id === userId) {
+            currentUser.avatar_url = avatarUrl;
+            localStorage.setItem('user', JSON.stringify(currentUser));
+            updateMyAvatarDisplay(avatarUrl);
+        }
         const friend = friendsList.find(f => f.id === userId);
         if (friend) {
             friend.avatar_url = avatarUrl;
@@ -442,7 +491,7 @@ function initSocket() {
         }
     });
 
-    // 1-on-1 Call Signaling
+    // 1-on-1 Calls
     socket.on('incoming_call', async ({ fromUserId, offer }) => {
         const friend = friendsList.find(f => f.id === fromUserId);
         const callerName = friend ? friend.username : 'Friend';
@@ -488,7 +537,7 @@ function initSocket() {
 
     socket.on('call_ended', () => { endCallCleanly(); });
 
-    // ================= GROUP VC (LOUNGE) SIGNALS =================
+    // GROUP VC (LOUNGE) SIGNALS
     socket.on('vc_member_list', (members) => {
         vcMembersList = members;
         renderVcOccupantsTree();
@@ -496,7 +545,6 @@ function initSocket() {
     });
 
     socket.on('current_vc_members', async (existingMembers) => {
-        // Connect to everyone already in the room
         for (const peer of existingMembers) {
             await createVcPeerConnection(peer.socketId, true);
         }
@@ -650,12 +698,10 @@ async function createVcPeerConnection(targetSocketId, isInitiator) {
     const pc = new RTCPeerConnection(rtcConfig);
     vcPeers.set(targetSocketId, pc);
 
-    // Add mic audio track
     if (vcLocalAudioStream) {
         vcLocalAudioStream.getTracks().forEach(t => pc.addTrack(t, vcLocalAudioStream));
     }
 
-    // Add screen share track if actively sharing
     if (vcLocalScreenStream) {
         vcLocalScreenStream.getTracks().forEach(t => pc.addTrack(t, vcLocalScreenStream));
     }
@@ -737,17 +783,14 @@ dockScreenBtn.onclick = async () => {
             vcLocalScreenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
             const screenTrack = vcLocalScreenStream.getVideoTracks()[0];
 
-            // Attach to self screen view
             vcScreenVideo.srcObject = vcLocalScreenStream;
             vcScreenContainer.style.display = 'flex';
             dockScreenBtn.innerText = 'Stop';
 
-            // Add track to all active VC peers
             vcPeers.forEach(pc => {
                 pc.addTrack(screenTrack, vcLocalScreenStream);
                 pc.createOffer().then(offer => {
                     pc.setLocalDescription(offer);
-                    // find socketId
                     for (const [sockId, peerPC] of vcPeers.entries()) {
                         if (peerPC === pc) {
                             socket.emit('vc_peer_signal', { targetSocketId: sockId, signalData: offer });
