@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
+const path = require('path');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
@@ -277,10 +278,8 @@ io.on('connection', (socket) => {
             );
             const message = result.rows[0];
 
-            // Send to sender
             socket.emit('receive_dm', message);
 
-            // Send to recipient if online
             const receiverSocket = activeSockets.get(parseInt(receiverId, 10));
             if (receiverSocket) {
                 io.to(receiverSocket.socketId).emit('receive_dm', message);
@@ -325,7 +324,6 @@ io.on('connection', (socket) => {
             const session = activeSockets.get(currentUserId);
             const sessionSeconds = Math.floor((Date.now() - session.connectedAt) / 1000);
 
-            // Add session seconds to user's database total
             await db.query(
                 'UPDATE users SET total_online_seconds = total_online_seconds + $1 WHERE id = $2',
                 [sessionSeconds, currentUserId]
@@ -335,6 +333,13 @@ io.on('connection', (socket) => {
             io.emit('user_status_changed', { userId: currentUserId, is_online: false });
         }
     });
+});
+
+// ================= SERVE STATIC FRONTEND ON RENDER =================
+app.use(express.static(path.join(__dirname, '../client')));
+
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, '../client/index.html'));
 });
 
 server.listen(PORT, () => {
