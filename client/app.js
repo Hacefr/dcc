@@ -8,9 +8,9 @@ let token = localStorage.getItem('token');
 let currentUser = JSON.parse(localStorage.getItem('user'));
 let socket = null;
 
-// App State
-let activeView = 'dms'; // 'dms' or 'server'
-let activeChannel = 'announcements'; // 'announcements', 'general', or 'vc'
+// App State (Restored from localStorage)
+let activeView = localStorage.getItem('last_view') || 'dms'; 
+let activeChannel = localStorage.getItem('last_channel') || 'announcements';
 let activeFriend = null;
 let friendsList = [];
 
@@ -18,6 +18,7 @@ let friendsList = [];
 let localStream = null;
 let screenStream = null;
 let peerConnection = null;
+let isCallDeafened = false;
 
 // Group VC (Lounge) State
 let inLoungeVC = false;
@@ -25,6 +26,7 @@ let vcLocalAudioStream = null;
 let vcLocalScreenStream = null;
 let vcPeers = new Map(); // socketId -> RTCPeerConnection
 let vcMembersList = [];
+let isLoungeDeafened = false;
 
 // Tab Tracker
 let tabCaptureStream = null;
@@ -48,6 +50,49 @@ const emojis = [
     '✨','🎉','💯','❤️','💔','🎮','💻','🚀','👀','🍕','🍔','☕'
 ];
 
+// ================= NATIVE AUDIO CHIMES SYNTHESIZER =================
+function playChime(type) {
+    try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+
+        const now = ctx.currentTime;
+
+        if (type === 'join') {
+            osc.frequency.setValueAtTime(440, now);
+            osc.frequency.exponentialRampToValueAtTime(880, now + 0.15);
+            gain.gain.setValueAtTime(0.12, now);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+            osc.start(now);
+            osc.stop(now + 0.25);
+        } else if (type === 'leave') {
+            osc.frequency.setValueAtTime(880, now);
+            osc.frequency.exponentialRampToValueAtTime(440, now + 0.15);
+            gain.gain.setValueAtTime(0.12, now);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+            osc.start(now);
+            osc.stop(now + 0.25);
+        } else if (type === 'message') {
+            osc.frequency.setValueAtTime(587.33, now);
+            gain.gain.setValueAtTime(0.08, now);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+            osc.start(now);
+            osc.stop(now + 0.12);
+        } else if (type === 'mention') {
+            osc.frequency.setValueAtTime(659.25, now);
+            osc.frequency.setValueAtTime(880, now + 0.1);
+            gain.gain.setValueAtTime(0.15, now);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+            osc.start(now);
+            osc.stop(now + 0.3);
+        }
+    } catch (e) { /* AudioContext requires user gesture first */ }
+}
+
 // ================= DOM ELEMENTS =================
 const authOverlay = document.getElementById('auth-overlay');
 const loginForm = document.getElementById('login-form');
@@ -70,6 +115,7 @@ const vcOccupantsList = document.getElementById('vc-occupants-list');
 const vcConnectedDock = document.getElementById('vc-connected-dock');
 const dockScreenBtn = document.getElementById('dock-screen-btn');
 const dockMuteBtn = document.getElementById('dock-mute-btn');
+const dockDeafenBtn = document.getElementById('dock-deafen-btn');
 const dockDisconnectBtn = document.getElementById('dock-disconnect-btn');
 
 const vcStageArea = document.getElementById('vc-stage-area');
@@ -86,6 +132,7 @@ const activeCallPanel = document.getElementById('active-call-panel');
 const callStatusText = document.getElementById('call-status-text');
 const screenShareBtn = document.getElementById('screen-share-btn');
 const muteMicBtn = document.getElementById('mute-mic-btn');
+const deafenCallBtn = document.getElementById('deafen-call-btn');
 const endCallBtn = document.getElementById('end-call-btn');
 const remoteAudio = document.getElementById('remote-audio');
 const remoteVideo = document.getElementById('remote-video');
@@ -133,7 +180,7 @@ function sendDesktopNotification(title, body) {
     }
 }
 
-// Emoji Picker setup
+// Emoji Picker Setup
 emojis.forEach(e => {
     const span = document.createElement('span');
     span.className = 'emoji-item';
@@ -153,6 +200,49 @@ emojiToggleBtn.onclick = (ev) => {
 document.addEventListener('click', (ev) => {
     if (!emojiPicker.contains(ev.target) && ev.target !== emojiToggleBtn) {
         emojiPicker.style.display = 'none';
+    }
+});
+
+// Double-click Fullscreen for Screen Sharing
+vcScreenVideo.ondblclick = () => {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else if (vcScreenVideo.srcObject) vcScreenVideo.requestFullscreen();
+};
+remoteVideo.ondblclick = () => {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else if (remoteVideo.srcObject) remoteVideo.requestFullscreen();
+};
+
+// Clipboard Screenshot Pasting (Ctrl + V)
+chatInput.addEventListener('paste', (e) => {
+    const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+    for (let item of items) {
+        if (item.type.indexOf('image') !== -1) {
+            e.preventDefault();
+            const blob = item.getAsFile();
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                const img = new Image();
+                img.onload = () => {
+                    const canvas = document.createElement('canvas');
+                    const maxDim = 600;
+                    let w = img.width, h = img.height;
+                    if (w > maxDim || h > maxDim) {
+                        if (w > h) { h = Math.round((h * maxDim) / w); w = maxDim; }
+                        else { w = Math.round((w * maxDim) / h); h = maxDim; }
+                    }
+                    canvas.width = w; canvas.height = h;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, w, h);
+                    const base64 = canvas.toDataURL('image/jpeg', 0.8);
+                    
+                    chatInput.value += `\n![screenshot](${base64})\n`;
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(blob);
+            break;
+        }
     }
 });
 
@@ -312,9 +402,7 @@ logoutBtn.addEventListener('click', () => {
             socket = null;
         }
 
-        localStorage.removeItem('token');
-        localStorage.removeItem('user');
-        localStorage.removeItem('my_local_avatar');
+        localStorage.clear();
         token = null;
         currentUser = null;
 
@@ -349,13 +437,21 @@ function initApp() {
     appContainer.style.display = 'flex';
 
     document.getElementById('my-username-display').innerText = currentUser.username;
-
-    // Database serves as source of truth for avatar
     updateMyAvatarDisplay(currentUser.avatar_url);
 
     requestNotificationPermission();
     initSocket();
     loadFriends();
+
+    // Restore last channel/view
+    if (activeView === 'server') {
+        navServerBtn.click();
+        if (activeChannel === 'general') channelGeneralBtn.click();
+        else channelAnnounceBtn.click();
+    } else {
+        navDmsBtn.click();
+    }
+
     handleRoute();
 }
 
@@ -371,8 +467,7 @@ avatarFileInput.addEventListener('change', (e) => {
         const img = new Image();
         img.onload = async () => {
             const canvas = document.createElement('canvas');
-            canvas.width = 96;
-            canvas.height = 96;
+            canvas.width = 96; canvas.height = 96;
             const ctx = canvas.getContext('2d');
 
             const minSide = Math.min(img.width, img.height);
@@ -395,9 +490,7 @@ avatarFileInput.addEventListener('change', (e) => {
                     },
                     body: JSON.stringify({ avatarUrl: base64Image })
                 });
-            } catch (err) {
-                console.error('Failed to sync avatar with server', err);
-            }
+            } catch (err) { console.error(err); }
         };
         img.src = event.target.result;
     };
@@ -416,10 +509,8 @@ resetPfpBtn.addEventListener('click', async () => {
         localStorage.setItem('user', JSON.stringify(currentUser));
         localStorage.removeItem('my_local_avatar');
         updateMyAvatarDisplay(null);
-        alert('Profile picture has been reset.');
-    } catch (err) {
-        alert('Failed to reset profile picture.');
-    }
+        alert('Profile picture reset.');
+    } catch (err) { alert('Failed to reset avatar.'); }
 });
 
 // ================= 4. SOCKET & REALTIME =================
@@ -433,6 +524,7 @@ function initSocket() {
     socket.on('server_alert', ({ message, author }) => {
         alertBannerText.innerText = `[Announcement from ${author}]: ${message}`;
         serverAlertBanner.style.display = 'flex';
+        playChime('mention');
     });
 
     socket.on('user_status_changed', ({ userId, is_online }) => {
@@ -465,19 +557,30 @@ function initSocket() {
     });
 
     socket.on('receive_dm', (message) => {
+        const isMe = message.sender_id === currentUser.id;
+        const isMentioned = message.content.includes(`@${currentUser.username}`);
+
         if (activeView === 'dms' && activeFriend && 
-           (message.sender_id === activeFriend.id || message.sender_id === currentUser.id)) {
-            const author = message.sender_id === currentUser.id ? currentUser.username : activeFriend.username;
-            appendMessage(author, message.content, message.created_at, message.avatar_url);
-        } else if (message.sender_id !== currentUser.id) {
+           (message.sender_id === activeFriend.id || isMe)) {
+            const author = isMe ? currentUser.username : activeFriend.username;
+            appendMessage(author, message.content, message.created_at, message.avatar_url, message.id, isMe);
+            if (!isMe) playChime(isMentioned ? 'mention' : 'message');
+        } else if (!isMe) {
+            playChime(isMentioned ? 'mention' : 'message');
             sendDesktopNotification(`New message from ${message.sender_username || 'Friend'}`, message.content);
         }
+    });
+
+    socket.on('deleted_dm', (id) => {
+        const el = document.getElementById(`msg-${id}`);
+        if (el) el.remove();
     });
 
     socket.on('new_announcement', (announcement) => {
         if (activeView === 'server' && activeChannel === 'announcements') {
             appendAnnouncement(announcement);
         }
+        playChime('message');
     });
 
     socket.on('deleted_announcement', (id) => {
@@ -486,15 +589,30 @@ function initSocket() {
     });
 
     socket.on('new_general_message', (msg) => {
+        const isMe = msg.user_id === currentUser.id;
+        const isMentioned = msg.content.includes(`@${currentUser.username}`);
+
         if (activeView === 'server' && activeChannel === 'general') {
             appendGeneralMessage(msg);
+            if (!isMe) playChime(isMentioned ? 'mention' : 'message');
+        } else if (!isMe) {
+            if (isMentioned) {
+                playChime('mention');
+                sendDesktopNotification('Mentioned in #general', `${msg.username}: ${msg.content}`);
+            }
         }
+    });
+
+    socket.on('deleted_general_message', (id) => {
+        const el = document.getElementById(`gen-msg-${id}`);
+        if (el) el.remove();
     });
 
     // 1-on-1 Calls
     socket.on('incoming_call', async ({ fromUserId, offer }) => {
         const friend = friendsList.find(f => f.id === fromUserId);
         const callerName = friend ? friend.username : 'Friend';
+        playChime('mention');
         sendDesktopNotification('Incoming Call', `${callerName} is calling you!`);
 
         if (confirm(`Incoming voice call from ${callerName}. Accept?`)) {
@@ -537,7 +655,7 @@ function initSocket() {
 
     socket.on('call_ended', () => { endCallCleanly(); });
 
-    // GROUP VC (LOUNGE) SIGNALS
+    // Group VC (Lounge)
     socket.on('vc_member_list', (members) => {
         vcMembersList = members;
         renderVcOccupantsTree();
@@ -551,6 +669,7 @@ function initSocket() {
     });
 
     socket.on('user_joined_vc', async (newMember) => {
+        playChime('join');
         await createVcPeerConnection(newMember.socketId, false);
     });
 
@@ -564,10 +683,7 @@ function initSocket() {
             await pc.setRemoteDescription(new RTCSessionDescription(signalData));
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
-            socket.emit('vc_peer_signal', {
-                targetSocketId: senderSocketId,
-                signalData: answer
-            });
+            socket.emit('vc_peer_signal', { targetSocketId: senderSocketId, signalData: answer });
         } else if (signalData.type === 'answer') {
             await pc.setRemoteDescription(new RTCSessionDescription(signalData));
         } else if (signalData.candidate) {
@@ -576,6 +692,7 @@ function initSocket() {
     });
 
     socket.on('user_left_vc', ({ socketId }) => {
+        playChime('leave');
         if (vcPeers.has(socketId)) {
             vcPeers.get(socketId).close();
             vcPeers.delete(socketId);
@@ -588,6 +705,7 @@ function initSocket() {
 // ================= 5. NAVIGATION =================
 navDmsBtn.addEventListener('click', () => {
     activeView = 'dms';
+    localStorage.setItem('last_view', 'dms');
     navDmsBtn.classList.add('active');
     navServerBtn.classList.remove('active');
     dmsSection.style.display = 'block';
@@ -610,6 +728,7 @@ navDmsBtn.addEventListener('click', () => {
 
 navServerBtn.addEventListener('click', () => {
     activeView = 'server';
+    localStorage.setItem('last_view', 'server');
     navServerBtn.classList.add('active');
     navDmsBtn.classList.remove('active');
     dmsSection.style.display = 'none';
@@ -643,6 +762,7 @@ channelVcBtn.addEventListener('click', () => {
 
 function openServerChannel(channel) {
     activeChannel = channel;
+    localStorage.setItem('last_channel', channel);
 
     if (channel === 'vc') {
         chatHeaderPrefix.innerText = '🔊';
@@ -674,12 +794,12 @@ function openServerChannel(channel) {
     } else if (channel === 'general') {
         channelLockedBanner.style.display = 'none';
         chatForm.style.display = 'flex';
-        chatInput.placeholder = 'Message #general...';
+        chatInput.placeholder = 'Message #general... (use @name to ping)';
         loadGeneralMessages();
     }
 }
 
-// ================= 6. GROUP VC (LOUNGE) LOGIC =================
+// ================= 6. GROUP VC (LOUNGE) & DEAFEN =================
 async function joinLoungeVC() {
     if (inLoungeVC) return;
     try {
@@ -689,6 +809,7 @@ async function joinLoungeVC() {
 
         socket.emit('join_server_vc');
         setupLocalSpeakingDetection(vcLocalAudioStream);
+        playChime('join');
     } catch (err) {
         alert('Microphone access is required to join the voice lounge.');
     }
@@ -708,10 +829,7 @@ async function createVcPeerConnection(targetSocketId, isInitiator) {
 
     pc.onicecandidate = (event) => {
         if (event.candidate) {
-            socket.emit('vc_peer_signal', {
-                targetSocketId,
-                signalData: { candidate: event.candidate }
-            });
+            socket.emit('vc_peer_signal', { targetSocketId, signalData: { candidate: event.candidate } });
         }
     };
 
@@ -725,6 +843,7 @@ async function createVcPeerConnection(targetSocketId, isInitiator) {
                 vcAudioPool.appendChild(audio);
             }
             audio.srcObject = event.streams[0];
+            audio.muted = isLoungeDeafened;
             setupRemoteSpeakingDetection(event.streams[0]);
         } else if (event.track.kind === 'video') {
             vcScreenVideo.srcObject = event.streams[0];
@@ -735,10 +854,7 @@ async function createVcPeerConnection(targetSocketId, isInitiator) {
     if (isInitiator) {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
-        socket.emit('vc_peer_signal', {
-            targetSocketId,
-            signalData: offer
-        });
+        socket.emit('vc_peer_signal', { targetSocketId, signalData: offer });
     }
 
     return pc;
@@ -762,6 +878,7 @@ function leaveLoungeVC() {
     vcAudioPool.innerHTML = '';
 
     socket.emit('leave_server_vc');
+    playChime('leave');
 
     vcScreenContainer.style.display = 'none';
     vcScreenVideo.srcObject = null;
@@ -773,7 +890,25 @@ dockMuteBtn.onclick = () => {
         const audioTrack = vcLocalAudioStream.getAudioTracks()[0];
         audioTrack.enabled = !audioTrack.enabled;
         dockMuteBtn.innerText = audioTrack.enabled ? 'Mute' : 'Unmute';
+        dockMuteBtn.classList.toggle('active', !audioTrack.enabled);
     }
+};
+
+dockDeafenBtn.onclick = () => {
+    isLoungeDeafened = !isLoungeDeafened;
+    dockDeafenBtn.classList.toggle('active', isLoungeDeafened);
+    dockDeafenBtn.innerText = isLoungeDeafened ? 'Undeafen' : 'Deafen';
+
+    if (vcLocalAudioStream) {
+        const audioTrack = vcLocalAudioStream.getAudioTracks()[0];
+        audioTrack.enabled = !isLoungeDeafened;
+        dockMuteBtn.innerText = audioTrack.enabled ? 'Mute' : 'Unmute';
+        dockMuteBtn.classList.toggle('active', !audioTrack.enabled);
+    }
+
+    document.querySelectorAll('#vc-audio-pool audio').forEach(a => {
+        a.muted = isLoungeDeafened;
+    });
 };
 
 dockScreenBtn.onclick = async () => {
@@ -834,15 +969,38 @@ function renderVcStageGrid() {
     vcMembersList.forEach(m => {
         const card = document.createElement('div');
         card.className = 'vc-grid-card';
+        const isSelf = m.userId === currentUser.id;
+        const volumeControlHtml = !isSelf 
+            ? `<input type="range" min="0" max="1" step="0.05" value="1" class="vc-volume-slider" title="Volume" oninput="setPeerVolume('${m.socketId}', this.value)">`
+            : '';
+
         card.innerHTML = `
             <div class="avatar-wrapper" id="vc-avatar-${m.userId}">${createAvatarElement(m.username, m.avatar_url)}</div>
             <span class="vc-grid-name">${m.username}</span>
+            ${volumeControlHtml}
         `;
         vcParticipantsGrid.appendChild(card);
     });
 }
 
+window.setPeerVolume = function(socketId, val) {
+    const audio = document.getElementById(`vc-audio-${socketId}`);
+    if (audio) audio.volume = val;
+};
+
 // ================= 7. ANNOUNCEMENTS & GENERAL =================
+function formatMentions(text) {
+    return text.replace(/@([a-zA-Z0-9_]+)/g, '<span class="mention-tag">@$1</span>');
+}
+
+function handleSmartAutoScroll(callback) {
+    const isAtBottom = messagesContainer.scrollHeight - messagesContainer.scrollTop <= messagesContainer.clientHeight + 80;
+    callback();
+    if (isAtBottom) {
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+}
+
 async function loadAnnouncements() {
     try {
         const res = await fetch(`${SERVER_URL}/api/announcements`, {
@@ -854,31 +1012,32 @@ async function loadAnnouncements() {
 }
 
 function appendAnnouncement(item) {
-    const msg = document.createElement('div');
-    msg.className = 'message';
-    msg.id = `announcement-${item.id}`;
+    handleSmartAutoScroll(() => {
+        const msg = document.createElement('div');
+        msg.className = 'message';
+        msg.id = `announcement-${item.id}`;
 
-    const date = new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const deleteBtnHtml = currentUser.role === 'owner' 
-        ? `<button class="delete-btn" onclick="deleteAnnouncement(${item.id})">Delete</button>` 
-        : '';
+        const date = new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const deleteBtnHtml = currentUser.role === 'owner' 
+            ? `<button class="delete-btn" onclick="deleteAnnouncement(${item.id})">Delete</button>` 
+            : '';
 
-    const formattedContent = typeof marked !== 'undefined' ? marked.parse(item.content) : item.content;
+        const formattedContent = typeof marked !== 'undefined' ? marked.parse(formatMentions(item.content)) : formatMentions(item.content);
 
-    msg.innerHTML = `
-        <div class="avatar-wrapper">${createAvatarElement(item.username, item.avatar_url)}</div>
-        <div class="message-content">
-            <div class="message-header">
-                <span class="message-author">${item.username}</span>
-                <span class="author-tag">Owner</span>
-                <span class="message-time">${date}</span>
-                ${deleteBtnHtml}
+        msg.innerHTML = `
+            <div class="avatar-wrapper">${createAvatarElement(item.username, item.avatar_url)}</div>
+            <div class="message-content">
+                <div class="message-header">
+                    <span class="message-author">${item.username}</span>
+                    <span class="author-tag">Owner</span>
+                    <span class="message-time">${date}</span>
+                    ${deleteBtnHtml}
+                </div>
+                <div class="message-body">${formattedContent}</div>
             </div>
-            <div class="message-body">${formattedContent}</div>
-        </div>
-    `;
-    messagesContainer.appendChild(msg);
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        `;
+        messagesContainer.appendChild(msg);
+    });
 }
 
 window.deleteAnnouncement = async function(id) {
@@ -899,23 +1058,42 @@ async function loadGeneralMessages() {
 }
 
 function appendGeneralMessage(item) {
-    const msg = document.createElement('div');
-    msg.className = 'message';
-    const date = new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    handleSmartAutoScroll(() => {
+        const msg = document.createElement('div');
+        const isMentioned = item.content.includes(`@${currentUser.username}`);
+        msg.className = `message ${isMentioned ? 'mentioned' : ''}`;
+        msg.id = `gen-msg-${item.id}`;
 
-    msg.innerHTML = `
-        <div class="avatar-wrapper">${createAvatarElement(item.username, item.avatar_url)}</div>
-        <div class="message-content">
-            <div class="message-header">
-                <span class="message-author">${item.username}</span>
-                <span class="message-time">${date}</span>
+        const isMe = item.user_id === currentUser.id;
+        const canDelete = isMe || currentUser.role === 'owner';
+        const deleteBtnHtml = canDelete 
+            ? `<button class="delete-btn" onclick="deleteGeneralMessage(${item.id})">Delete</button>` 
+            : '';
+
+        const date = new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const formattedContent = typeof marked !== 'undefined' ? marked.parse(formatMentions(item.content)) : formatMentions(item.content);
+
+        msg.innerHTML = `
+            <div class="avatar-wrapper">${createAvatarElement(item.username, item.avatar_url)}</div>
+            <div class="message-content">
+                <div class="message-header">
+                    <span class="message-author">${item.username}</span>
+                    <span class="message-time">${date}</span>
+                    ${deleteBtnHtml}
+                </div>
+                <div class="message-body">${formattedContent}</div>
             </div>
-            <p class="message-body">${item.content}</p>
-        </div>
-    `;
-    messagesContainer.appendChild(msg);
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        `;
+        messagesContainer.appendChild(msg);
+    });
 }
+
+window.deleteGeneralMessage = async function(id) {
+    await fetch(`${SERVER_URL}/api/general-messages/${id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+    });
+};
 
 // ================= 8. FRIENDS & DMs =================
 async function loadFriends() {
@@ -987,7 +1165,7 @@ async function openDM(friend) {
     chatHeaderPrefix.innerText = '@';
     chatHeaderTitle.innerText = friend.username;
     callHeaderAction.style.display = 'block';
-    chatInput.placeholder = `Message @${friend.username}... (Shift+Enter for newline)`;
+    chatInput.placeholder = `Message @${friend.username}... (Ctrl+V image)`;
     messagesContainer.innerHTML = '';
 
     try {
@@ -996,8 +1174,9 @@ async function openDM(friend) {
         });
         const messages = await res.json();
         messages.forEach(m => {
-            const author = m.sender_id === currentUser.id ? currentUser.username : friend.username;
-            appendMessage(author, m.content, m.created_at, m.avatar_url);
+            const isMe = m.sender_id === currentUser.id;
+            const author = isMe ? currentUser.username : friend.username;
+            appendMessage(author, m.content, m.created_at, m.avatar_url, m.id, isMe);
         });
     } catch (err) { console.error(err); }
 }
@@ -1041,26 +1220,44 @@ chatForm.addEventListener('submit', async (e) => {
     chatInput.value = '';
 });
 
-function appendMessage(author, text, createdAt, avatarUrl) {
-    const msg = document.createElement('div');
-    msg.className = 'message';
-    const date = new Date(createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+function appendMessage(author, text, createdAt, avatarUrl, id, isMe) {
+    handleSmartAutoScroll(() => {
+        const msg = document.createElement('div');
+        const isMentioned = text.includes(`@${currentUser.username}`);
+        msg.className = `message ${isMentioned ? 'mentioned' : ''}`;
+        msg.id = `msg-${id}`;
 
-    msg.innerHTML = `
-        <div class="avatar-wrapper">${createAvatarElement(author, avatarUrl)}</div>
-        <div class="message-content">
-            <div class="message-header">
-                <span class="message-author">${author}</span>
-                <span class="message-time">${date}</span>
+        const date = new Date(createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const canDelete = isMe || currentUser.role === 'owner';
+        const deleteBtnHtml = canDelete 
+            ? `<button class="delete-btn" onclick="deleteDMMessage(${id})">Delete</button>` 
+            : '';
+
+        const formattedContent = typeof marked !== 'undefined' ? marked.parse(formatMentions(text)) : formatMentions(text);
+
+        msg.innerHTML = `
+            <div class="avatar-wrapper">${createAvatarElement(author, avatarUrl)}</div>
+            <div class="message-content">
+                <div class="message-header">
+                    <span class="message-author">${author}</span>
+                    <span class="message-time">${date}</span>
+                    ${deleteBtnHtml}
+                </div>
+                <div class="message-body">${formattedContent}</div>
             </div>
-            <p class="message-body">${text}</p>
-        </div>
-    `;
-    messagesContainer.appendChild(msg);
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        `;
+        messagesContainer.appendChild(msg);
+    });
 }
 
-// ================= 9. 1-ON-1 CALLS & SPEAKING DETECTOR =================
+window.deleteDMMessage = async function(id) {
+    await fetch(`${SERVER_URL}/api/messages/${id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+    });
+};
+
+// ================= 9. 1-ON-1 CALLS & DEAFEN =================
 async function setupPeerConnection() {
     localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
     peerConnection = new RTCPeerConnection(rtcConfig);
@@ -1073,6 +1270,7 @@ async function setupPeerConnection() {
             remoteVideo.style.display = 'block';
         } else if (event.track.kind === 'audio') {
             remoteAudio.srcObject = event.streams[0];
+            remoteAudio.muted = isCallDeafened;
             setupRemoteSpeakingDetection(event.streams[0]);
         }
     };
@@ -1085,6 +1283,21 @@ async function setupPeerConnection() {
 
     setupLocalSpeakingDetection(localStream);
 }
+
+deafenCallBtn.onclick = () => {
+    isCallDeafened = !isCallDeafened;
+    deafenCallBtn.classList.toggle('active', isCallDeafened);
+    deafenCallBtn.innerText = isCallDeafened ? 'Undeafen' : 'Deafen';
+
+    if (localStream) {
+        const audioTrack = localStream.getAudioTracks()[0];
+        audioTrack.enabled = !isCallDeafened;
+        muteMicBtn.innerText = audioTrack.enabled ? 'Mute' : 'Unmute';
+        muteMicBtn.classList.toggle('active', !audioTrack.enabled);
+    }
+
+    remoteAudio.muted = isCallDeafened;
+};
 
 function setupLocalSpeakingDetection(stream) {
     try {
@@ -1104,12 +1317,12 @@ function setupLocalSpeakingDetection(stream) {
 
             if (avg > 25) {
                 myAvatar.classList.add('speaking');
-                const vcSelfAvatar = document.getElementById(`vc-avatar-${currentUser.id}`);
-                if (vcSelfAvatar) vcSelfAvatar.classList.add('speaking');
+                const vcSelf = document.getElementById(`vc-avatar-${currentUser.id}`);
+                if (vcSelf) vcSelf.classList.add('speaking');
             } else {
                 myAvatar.classList.remove('speaking');
-                const vcSelfAvatar = document.getElementById(`vc-avatar-${currentUser.id}`);
-                if (vcSelfAvatar) vcSelfAvatar.classList.remove('speaking');
+                const vcSelf = document.getElementById(`vc-avatar-${currentUser.id}`);
+                if (vcSelf) vcSelf.classList.remove('speaking');
             }
         }, 100);
     } catch (e) { console.error(e); }
@@ -1185,6 +1398,7 @@ muteMicBtn.addEventListener('click', () => {
         const audioTrack = localStream.getAudioTracks()[0];
         audioTrack.enabled = !audioTrack.enabled;
         muteMicBtn.innerText = audioTrack.enabled ? 'Mute' : 'Unmute';
+        muteMicBtn.classList.toggle('active', !audioTrack.enabled);
     }
 });
 
@@ -1211,6 +1425,9 @@ function endCallCleanly() {
     remoteVideo.srcObject = null;
     remoteVideo.style.display = 'none';
     activeCallPanel.style.display = 'none';
+    isCallDeafened = false;
+    deafenCallBtn.classList.remove('active');
+    deafenCallBtn.innerText = 'Deafen';
 }
 
 // ================= 10. TAB TRACKER & TIMER =================
