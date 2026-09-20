@@ -37,14 +37,14 @@ body {
     height: 100vh;
 }
 
-/* ================= SPEAKING RING GLOW ================= */
+/* Speaking Ring Glow */
 .speaking {
     box-shadow: 0 0 0 3px var(--green) !important;
     border-radius: 50% !important;
     transition: box-shadow 0.1s ease-in-out;
 }
 
-/* ================= SERVER ALERT BANNER ================= */
+/* Server Alert Banner */
 #server-alert-banner {
     position: fixed;
     top: 0;
@@ -71,7 +71,7 @@ body {
     font-weight: bold;
 }
 
-/* ================= AVATAR FIXES ================= */
+/* Avatar Elements */
 .avatar-wrapper {
     position: relative;
     width: 36px;
@@ -118,7 +118,7 @@ body {
 .status-indicator.online { background-color: var(--green); }
 .status-indicator.offline { background-color: #80848e; }
 
-/* ================= SERVER RAIL ================= */
+/* Server Rail */
 #server-rail {
     width: 72px;
     background-color: var(--bg-rail);
@@ -179,7 +179,7 @@ body {
 
 .rail-btn.active .pill-indicator { display: block; }
 
-/* ================= SIDEBAR ================= */
+/* Sidebar */
 #sidebar {
     width: 240px;
     background-color: var(--bg-sidebar);
@@ -288,7 +288,6 @@ body {
 }
 .friend-activity.offline-text { color: var(--text-muted); }
 
-/* VC Occupants List in Sidebar */
 .vc-occupants-tree {
     list-style: none;
     padding-left: 28px;
@@ -384,12 +383,12 @@ body {
     display: block;
 }
 
-.activity-controls {
+.activity-controls, .profile-actions {
     display: flex;
     gap: 6px;
 }
 
-.activity-controls button {
+.activity-controls button, .profile-actions button {
     flex: 1;
     padding: 5px 0;
     font-size: 11px;
@@ -400,6 +399,9 @@ body {
     background-color: var(--bg-hover);
     color: var(--text-normal);
 }
+.activity-controls button:hover, .profile-actions button:hover {
+    background-color: var(--bg-active);
+}
 
 #track-tab-btn {
     background-color: #2e3b5e;
@@ -407,7 +409,14 @@ body {
 }
 #track-tab-btn:hover { background-color: #3b4b77; }
 
-/* ================= CHAT AREA & VC STAGE ================= */
+.btn-logout {
+    color: var(--red) !important;
+}
+.btn-logout:hover {
+    background-color: rgba(242, 63, 67, 0.15) !important;
+}
+
+/* Chat & VC Stage Area */
 #chat-area {
     flex: 1;
     display: flex;
@@ -566,7 +575,6 @@ body {
     color: var(--text-header);
 }
 
-/* Chat Messages Feed */
 #messages-container {
     flex: 1;
     overflow-y: auto;
@@ -633,7 +641,7 @@ body {
     margin-left: 8px;
 }
 
-/* Markdown styling in messages */
+/* Markdown styling */
 .message-body h1, .message-body h2, .message-body h3 {
     color: var(--text-header);
     margin: 8px 0 4px 0;
@@ -757,7 +765,7 @@ body {
     color: var(--text-muted);
 }
 
-/* ================= MODALS ================= */
+/* Modals */
 #auth-overlay, #debug-overlay {
     position: fixed;
     top: 0;
